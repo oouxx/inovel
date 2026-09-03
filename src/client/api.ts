@@ -70,6 +70,27 @@ export const api = {
     http<StatsSummary>(`/api/stats`),
   aiStatus: () =>
     http<{ provider: string; model: string; configured: boolean }>(`/api/ai/status`),
+  // ---- 封面 / 书籍信息 ----
+  coverUrl: (bookId: number) => `/api/books/${bookId}/cover`,
+  uploadCover: async (bookId: number, file: File) => {
+    const fd = new FormData();
+    fd.append('cover', file);
+    const res = await fetch(`/api/books/${bookId}/cover`, { method: 'POST', body: fd });
+    if (!res.ok) {
+      let msg = `${res.status}`;
+      try {
+        const d = await res.json();
+        if (d?.error) msg = d.error;
+      } catch {}
+      throw new Error(msg);
+    }
+    return (await res.json()) as { ok: boolean; coverUrl: string };
+  },
+  removeCover: (bookId: number) => http<{ ok: boolean }>(`/api/books/${bookId}/cover`, { method: 'DELETE' }),
+  updateBook: (
+    bookId: number,
+    data: { title?: string; author?: string; category?: string },
+  ) => http<{ ok: boolean; book: Book }>(`/api/books/${bookId}`, { method: 'PATCH', body: JSON.stringify(data) }),
 };
 
 export interface Bookmark {

@@ -225,6 +225,10 @@ function centerTap() {
 // ---------- 点击分区(左 25% 上一页,右 25% 下一页) ----------
 function onViewportClick(e: MouseEvent) {
   if (loading.value) return;
+  if (selPopup.value) {
+    selPopup.value = null;
+    return; // 先收起划词按钮,不误触翻页
+  }
   const el = viewport.value!;
   const rect = el.getBoundingClientRect();
   const x = e.clientX - rect.left;
@@ -302,7 +306,7 @@ function onScroll() {
 // ---------- 选中文字 → AI ----------
 const selPopup = ref<{ x: number; y: number; term: string; context: string } | null>(null);
 
-function onMouseUp() {
+function showSelPopup() {
   const sel = window.getSelection();
   const text = sel?.toString().trim() || '';
   if (!text || !sel || sel.isCollapsed) {
@@ -315,9 +319,30 @@ function onMouseUp() {
   let context = '';
   const node = sel.anchorNode;
   const el = (node?.nodeType === Node.TEXT_NODE ? node.parentElement : (node as HTMLElement)) as HTMLElement | null;
-  if (el?.tagName === 'P') context = el.textContent?.trim().slice(0, 300) || '';
+  if (el?.closest?.('.reader-content')) {
+    const p = el.closest('p');
+    if (p) context = p.textContent?.trim().slice(0, 300) || '';
+  } else {
+    selPopup.value = null;
+    return; // 选区不在阅读内容内
+  }
   const rect = sel.getRangeAt(0).getBoundingClientRect();
   selPopup.value = { x: rect.left + rect.width / 2, y: rect.top - 8, term, context };
+}
+
+function onMouseUp() {
+  showSelPopup();
+}
+
+// 移动端:长按选择后 touchend / selectionchange 触发
+let selTimer: any = null;
+function onSelectionChange() {
+  clearTimeout(selTimer);
+  selTimer = setTimeout(() => {
+    // 延迟检查:触摸选择的句柄调整需要时间
+    const sel = window.getSelection();
+    if (sel && !sel.isCollapsed && sel.toString().trim()) showSelPopup();
+  }, 350);
 }
 
 async function aiExplain() {
@@ -415,6 +440,7 @@ onMounted(() => {
   loadChapter(true);
   window.addEventListener('keydown', onKeydown);
   document.addEventListener('mouseup', onMouseUp);
+  document.addEventListener('selectionchange', onSelectionChange);
   nextTick(setupObserver);
   startHeartbeat();
 });
@@ -422,6 +448,7 @@ onBeforeUnmount(() => clearInterval(heartbeatTimer));
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKeydown);
   document.removeEventListener('mouseup', onMouseUp);
+  document.removeEventListener('selectionchange', onSelectionChange);
   resizeObserver?.disconnect();
   clearTimeout(saveTimer);
   clearTimeout(hideUiTimer);
