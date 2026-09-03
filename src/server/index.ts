@@ -1,5 +1,4 @@
 import { Hono } from 'hono';
-import { serveStatic } from 'hono/bun';
 import { initDb, getDb } from './database';
 import { scanLibrary, getNovelsDir } from './scanner/scanner';
 import { bookRoutes } from './routes/books';
@@ -12,7 +11,7 @@ import { bookmarkRoutes, bookmarkDeleteRoutes } from './routes/bookmarks';
 import { statsRoutes } from './routes/stats';
 import { fullTextSearch, type FullTextResult } from './services/searchService';
 import { bookMetaRoutes } from './routes/bookMeta';
-import { existsSync } from 'node:fs';
+import { existsSync, statSync } from 'node:fs';
 import path from 'node:path';
 
 // ---------- 配置 ----------
@@ -56,14 +55,70 @@ const distDir = path.resolve(import.meta.dir, '../../dist');
 const indexFile = path.join(distDir, 'index.html');
 const hasDist = existsSync(indexFile);
 
+const STATIC_MIME: Record<string, string> = {
+  '.js': 'text/javascript; charset=utf-8',
+  '.mjs': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.html': 'text/html; charset=utf-8',
+  '.json': 'application/json',
+  '.map': 'application/json',
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.avif': 'image/avif',
+  '.ico': 'image/x-icon',
+  '.woff': 'font/woff',
+  '.woff2': 'font/woff2',
+  '.ttf': 'font/ttf',
+  '.wasm': 'application/wasm',
+  '.txt': 'text/plain; charset=utf-8',
+};
+
 if (hasDist) {
-  const staticRoot = path.relative(process.cwd(), distDir);
   const indexHtml = await Bun.file(indexFile).text();
-  app.use('/*', serveStatic({ root: staticRoot }));
-  // SPA fallback:非 /api 路由回 index.html
+
+  /**
+   * 自实现静态服务,确保 MIME 永远正确:
+   * - /assets/* 等 hash 资源:immutable 强缓存;缺失时 404(绝不返回 HTML 冒充 JS/CSS)
+   * - index.html:Cache-Control: no-cache,防止浏览器缓存旧 HTML 引用失效资源
+   * - 无扩展名路径(/books/3 等):SPA fallback → index.html
+   */
   app.get('/*', (c) => {
-    if (c.req.path.startsWith('/api/')) return c.notFound();
-    return c.html(indexHtml);
+    const raw = c.req.path;
+    if (raw.startsWith('/api/')) return c.notFound();
+
+    let p: string;
+    try {
+      p = decodeURIComponent(raw);
+    } catch {
+      return c.notFound();
+    }
+    const ext = path.extname(p);
+
+    if (ext) {
+      // 静态文件请求
+      const rel = p.replace(/^\/+/, '');
+      if (rel.includes('..')) return c.notFound(); // 防目录穿越
+      const abs = path.join(distDir, rel);
+      if (existsSync(abs) && statSync(abs).isFile()) {
+        const headers: Record<string, string> = {
+          'Content-Type': STATIC_MIME[ext] || 'application/octet-stream',
+          // hash 文件名 → 可强缓存;html 例外(index.html 理论上走无扩展名分支)
+          'Cache-Control': ext === '.html' ? 'no-cache' : 'public, max-age=31536000, immutable',
+        };
+        return new Response(Bun.file(abs), { headers });
+      }
+      // 资源缺失:明确 404,而不是返回 index.html
+      return c.notFound();
+    }
+
+    // SPA 路由 → index.html
+    return new Response(indexHtml, {
+      headers: { 'Content-Type': 'text/html; charset=UTF-8', 'Cache-Control': 'no-cache' },
+    });
   });
 } else {
   app.get('/', (c) =>

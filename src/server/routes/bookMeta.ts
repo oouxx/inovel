@@ -18,11 +18,43 @@ export function findCover(bookId: number): string | null {
   return null;
 }
 
-/** GET /api/books/:id/cover —— 封面图片 */
+/** 无封面时动态生成默认封面 SVG(渐变 + 书名首字) */
+export function defaultCoverSvg(title: string): string {
+  let hue = 210;
+  try {
+    for (const ch of title) hue = (hue * 31 + (ch.codePointAt(0) || 0)) % 360;
+  } catch {}
+  const hue2 = (hue + 40) % 360;
+  const initial = (title || '书').slice(0, 1);
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="300" height="420" viewBox="0 0 300 420">
+  <defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="hsl(${hue}, 42%, 52%)"/>
+    <stop offset="1" stop-color="hsl(${hue2}, 38%, 38%)"/>
+  </linearGradient></defs>
+  <rect width="300" height="420" fill="url(#g)"/>
+  <text x="150" y="200" text-anchor="middle" font-family="PingFang SC, Microsoft YaHei, sans-serif"
+    font-size="96" font-weight="600" fill="#ffffff" opacity="0.95">${escapeXml(initial)}</text>
+  <text x="150" y="370" text-anchor="middle" font-family="PingFang SC, Microsoft YaHei, sans-serif"
+    font-size="18" fill="#ffffff" opacity="0.85">${escapeXml(escapeXml(title).slice(0, 12))}</text>
+</svg>`;
+  return svg;
+}
+
+function escapeXml(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+/** GET /api/books/:id/cover —— 封面图片(无封面时返回生成的占位 SVG) */
 bookMetaRoutes.get('/:id/cover', (c) => {
   const id = Number(c.req.param('id'));
+  const book = getBook(id);
+  if (!book) return c.notFound();
   const p = findCover(id);
-  if (!p) return c.notFound();
+  if (!p) {
+    return new Response(defaultCoverSvg(book.title), {
+      headers: { 'Content-Type': 'image/svg+xml', 'Cache-Control': 'no-cache' },
+    });
+  }
   const ext = path.extname(p).toLowerCase();
   const mime =
     ext === '.png' ? 'image/png' : ext === '.webp' ? 'image/webp' : ext === '.gif' ? 'image/gif' : 'image/jpeg';

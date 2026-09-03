@@ -16,7 +16,9 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      '/api': { target: 'http://127.0.0.1:8080', changeOrigin: false },
+      // 注意:必须带尾部斜杠,否则 src/client/api.ts 的模块 URL "/api.ts"
+      // 会被前缀匹配进代理,导致动态导入 "Failed to fetch" 报错
+      '/api/': { target: 'http://127.0.0.1:8080', changeOrigin: false },
     },
   },
   build: {
