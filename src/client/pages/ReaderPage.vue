@@ -129,14 +129,21 @@ async function repaginate() {
   if (settings.mode !== 'paged' || viewportH.value <= 0 || viewportW.value <= 0) return;
   animating.value = false;
   await nextTick();
-  const step = viewportW.value + GAP;
+  // 列宽 = min(屏宽, 设置宽度);两侧留白计入列间距,保证每一页视觉居中
+  const colW = pageColumnWidth.value;
+  const step = colW + pageGap.value;
   const sw = contentEl.value.scrollWidth;
-  pageCount.value = Math.max(1, Math.round(sw / step));
+  pageCount.value = Math.max(1, Math.round((sw - pagePad.value - colW) / step) + 1);
   // clamp
   if (page.value >= pageCount.value) page.value = pageCount.value - 1;
   await nextTick();
   animating.value = true;
 }
+
+/** 分页列宽:窄 560 / 标准 680 / 宽 860,但不超出屏幕 */
+const pageColumnWidth = computed(() => Math.max(280, Math.min(viewportW.value || window.innerWidth, settings.width)));
+const pagePad = computed(() => Math.max(0, ((viewportW.value || window.innerWidth) - pageColumnWidth.value) / 2));
+const pageGap = computed(() => Math.max(GAP, (viewportW.value || window.innerWidth) - pageColumnWidth.value));
 
 function goToPage(p: number, instant = false) {
   if (instant) animating.value = false;
@@ -465,12 +472,17 @@ const contentStyle = computed(() => {
     // 首次测量前给一个安全占位,避免 0 尺寸闪烁
     const w = viewportW.value || window.innerWidth;
     const h = viewportH.value || window.innerHeight;
+    const colW = Math.max(280, Math.min(w, settings.width));
+    const pad = Math.max(0, (w - colW) / 2);
+    const gap = Math.max(GAP, w - colW);
     base.height = `${h}px`;
     base.width = `${w}px`;
-    base.columnWidth = `${w}px`;
-    base.columnGap = `${GAP}px`;
+    base.paddingLeft = `${pad}px`;
+    base.paddingRight = `${pad}px`;
+    base.columnWidth = `${colW}px`;
+    base.columnGap = `${gap}px`;
     base.columnFill = 'auto';
-    base.transform = `translateX(-${page.value * (w + GAP)}px)`;
+    base.transform = `translateX(-${page.value * (colW + gap)}px)`;
     base.transition = animating.value ? 'transform 0.32s cubic-bezier(0.25, 0.1, 0.25, 1)' : 'none';
   } else {
     base.maxWidth = `${settings.width}px`;

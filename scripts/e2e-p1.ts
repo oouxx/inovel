@@ -30,8 +30,8 @@ if (!uiVisible) {
 }
 await page.click('button[title="添加书签"]');
 await page.waitForTimeout(600);
-const toast = await page.locator('text=已添加书签').isVisible().catch(() => false);
-ok('添加书签 toast', toast);
+const toast = await page.locator('text=/已添加书签|已有书签/').first().isVisible().catch(() => false);
+ok('添加书签 toast(新增或去重提示)', toast);
 await page.waitForTimeout(1500);
 
 // 打开抽屉 → 书签 tab
