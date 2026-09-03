@@ -21,6 +21,11 @@ export function initDb(dataDir: string): Database {
   _db.exec('PRAGMA synchronous = NORMAL;');
   _db.exec('PRAGMA foreign_keys = ON;');
   migrate(_db);
+  try {
+    _db.exec('ALTER TABLE books ADD COLUMN tags TEXT DEFAULT \'[]\'');
+  } catch {
+    // 列已存在
+  }
   return _db;
 }
 
@@ -39,6 +44,7 @@ function migrate(db: Database) {
       chapter_count INTEGER DEFAULT 0,
       status        TEXT DEFAULT 'ok',
       error         TEXT,
+      tags          TEXT DEFAULT '[]',
       created_at    INTEGER,
       updated_at    INTEGER
     );

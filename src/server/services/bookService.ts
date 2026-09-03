@@ -11,9 +11,9 @@ export function listBooks(opts: { category?: string; q?: string; limit?: number;
     params.push(opts.category);
   }
   if (opts.q) {
-    conds.push('(title LIKE ? OR author LIKE ? OR category LIKE ?)');
+    conds.push('(title LIKE ? OR author LIKE ? OR category LIKE ? OR tags LIKE ?)');
     const like = `%${opts.q}%`;
-    params.push(like, like, like);
+    params.push(like, like, like, like);
   }
   const where = conds.length ? `WHERE ${conds.join(' AND ')}` : '';
   const rows = db
@@ -60,6 +60,22 @@ export function saveProgress(bookId: number, data: { chapter_index: number; page
   ).run(bookId, data.chapter_index, data.page, data.progress, now);
 }
 
+/** 解析书籍标签(JSON 数组,容错) */
+export function parseTags(book: Book): string[] {
+  try {
+    const arr = JSON.parse(book.tags || '[]');
+    return Array.isArray(arr) ? arr.filter((t) => typeof t === 'string').slice(0, 12) : [];
+  } catch {
+    return [];
+  }
+}
+
+export function saveTags(bookId: number, tags: string[]) {
+  getDb()
+    .query('UPDATE books SET tags = ?, updated_at = ? WHERE id = ?')
+    .run(JSON.stringify(tags.slice(0, 12)), Date.now(), bookId);
+}
+
 export function listCategories(): { name: string; count: number }[] {
   return getDb()
     .query(`SELECT category AS name, COUNT(*) AS count FROM books GROUP BY category ORDER BY count DESC, name`)
@@ -85,11 +101,11 @@ export function searchBooks(q: string): SearchResult[] {
   } catch {
     // FTS 查询语法问题则忽略
   }
-  // 2) LIKE 兜底(英文单词 / 混合 / FTS 未命中)
+  // 2) LIKE 兜底(英文单词 / 混合 / FTS 未命中 / 标签)
   const like = `%${trimmed}%`;
   const likeRows = db
-    .query(`SELECT * FROM books WHERE title LIKE ? OR author LIKE ? OR category LIKE ? LIMIT 50`)
-    .all(like, like, like) as unknown as Book[];
+    .query(`SELECT * FROM books WHERE title LIKE ? OR author LIKE ? OR category LIKE ? OR tags LIKE ? LIMIT 50`)
+    .all(like, like, like, like) as unknown as Book[];
   for (const r of likeRows) results.set(r.id, toSearchItem(r));
   return [...results.values()];
 }

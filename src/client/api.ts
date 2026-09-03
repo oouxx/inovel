@@ -89,7 +89,7 @@ export const api = {
   removeCover: (bookId: number) => http<{ ok: boolean }>(`/api/books/${bookId}/cover`, { method: 'DELETE' }),
   updateBook: (
     bookId: number,
-    data: { title?: string; author?: string; category?: string },
+    data: { title?: string; author?: string; category?: string; tags?: string[] },
   ) => http<{ ok: boolean; book: Book }>(`/api/books/${bookId}`, { method: 'PATCH', body: JSON.stringify(data) }),
 };
 

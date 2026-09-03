@@ -11,6 +11,8 @@ export interface Book {
   encoding: string;
   category: string;
   chapter_count: number;
+  /** JSON 字符串数组 */
+  tags: string;
   /** ok | warn | error */
   status: string;
   error: string | null;

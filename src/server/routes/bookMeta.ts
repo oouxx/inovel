@@ -81,9 +81,17 @@ bookMetaRoutes.patch('/:id', async (c) => {
   const title = typeof body.title === 'string' && body.title.trim() ? body.title.trim().slice(0, 200) : book.title;
   const author = typeof body.author === 'string' ? body.author.trim().slice(0, 100) : book.author;
   const category = typeof body.category === 'string' ? body.category.trim().slice(0, 50) : book.category;
+  let tagsJson: string | null = null;
+  if (Array.isArray(body.tags)) {
+    const tags = body.tags
+      .filter((t: unknown) => typeof t === 'string' && t.trim())
+      .map((t: string) => t.trim().slice(0, 20))
+      .slice(0, 12);
+    tagsJson = JSON.stringify(tags);
+  }
   getDb()
-    .query('UPDATE books SET title = ?, author = ?, category = ?, updated_at = ? WHERE id = ?')
-    .run(title, author, category, Date.now(), id);
+    .query('UPDATE books SET title = ?, author = ?, category = ?, tags = COALESCE(?, tags), updated_at = ? WHERE id = ?')
+    .run(title, author, category, tagsJson, Date.now(), id);
   syncFts(id);
   return c.json({ ok: true, book: getBook(id) });
 });

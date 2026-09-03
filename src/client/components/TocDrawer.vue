@@ -53,10 +53,15 @@ async function scrollToCurrent() {
   }, 60);
 }
 
+const RENDER_CAP = 300;
 const filtered = () => {
   const q = query.value.trim().toLowerCase();
-  if (!q) return chapters.value;
-  return chapters.value.filter((c) => c.title?.toLowerCase().includes(q.toLowerCase()));
+  const list = q
+    ? chapters.value.filter((c) => c.title?.toLowerCase().includes(q.toLowerCase()))
+    : chapters.value;
+  // 超大书保护:仅渲染前 N 条,搜索可精确过滤
+  if (list.length > RENDER_CAP && !q) return list.slice(0, RENDER_CAP);
+  return list.slice(0, RENDER_CAP);
 };
 
 // ---- 书签 ----
@@ -148,6 +153,12 @@ watch(() => props.bookId, () => {
             </div>
           </div>
           <div ref="listEl" class="flex-1 overflow-y-auto py-1">
+            <div
+              v-if="chapters.length > RENDER_CAP && !query.trim()"
+              class="px-4 py-1.5 text-xs text-dim"
+            >
+              仅显示前 {{ RENDER_CAP }} 章,输入关键词可精确搜索
+            </div>
             <RouterLink
               v-for="c in filtered()"
               :key="c.id"

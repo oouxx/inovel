@@ -25,6 +25,29 @@ const editTitle = ref('');
 const editAuthor = ref('');
 const saving = ref(false);
 
+// 标签
+const tags = computed(() => {
+  try {
+    const arr = JSON.parse(book.value?.tags || '[]');
+    return Array.isArray(arr) ? arr : [];
+  } catch {
+    return [];
+  }
+});
+const newTag = ref('');
+async function addTag() {
+  const t = newTag.value.trim();
+  if (!t || !book.value || tags.value.includes(t)) return;
+  const r = await api.updateBook(bookId, { tags: [...tags.value, t].slice(0, 12) });
+  book.value = r.book;
+  newTag.value = '';
+}
+async function removeTag(t: string) {
+  if (!book.value) return;
+  const r = await api.updateBook(bookId, { tags: tags.value.filter((x) => x !== t) });
+  book.value = r.book;
+}
+
 onMounted(async () => {
   try {
     book.value = await api.getBook(bookId);
@@ -159,6 +182,27 @@ async function saveEdit() {
               </div>
             </div>
           </template>
+
+          <!-- 标签 -->
+          <div class="mt-3 flex flex-wrap items-center gap-1.5">
+            <span
+              v-for="t in tags"
+              :key="t"
+              class="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs"
+              style="background: var(--accent-soft); color: var(--accent)"
+            >
+              {{ t }}
+              <button class="opacity-60 hover:opacity-100" @click="removeTag(t)"><X class="w-3 h-3" /></button>
+            </span>
+            <form class="inline-flex" @submit.prevent="addTag">
+              <input
+                v-model="newTag"
+                class="input !py-1 !text-xs !w-24 !rounded-full"
+                placeholder="+ 标签"
+                maxlength="20"
+              />
+            </form>
+          </div>
 
           <p class="text-sm text-dim mt-2 flex items-center gap-1.5">
             <FileText class="w-4 h-4" /> {{ book.chapter_count }} 章 · {{ (book.file_size / 1024 / 1024).toFixed(2) }} MB ·
