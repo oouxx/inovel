@@ -11,8 +11,6 @@
     "start": "bun run scripts/kill-port.ts 8080 && bun src/server/index.ts",
     "ports:free": "bun run scripts/kill-port.ts 8080 5173",
     "scan": "bun run scripts/scan.ts",
-    "clean:test": "bun run scripts/clean-test-data.ts",
-    "deploy": "bash scripts/deploy.sh",
     "typecheck:server": "tsc -p tsconfig.server.json --noEmit",
     "typecheck:client": "vue-tsc -p tsconfig.client.json --noEmit"
   },

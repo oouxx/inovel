@@ -6,3 +6,7 @@ data/
 tmp/
 
 AGENTS.md
+
+# 本地运维脚本,不入库
+scripts/deploy.sh
+scripts/clean-test-data.ts
