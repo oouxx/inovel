@@ -3,13 +3,32 @@ import { ref, onMounted, computed } from 'vue';
 import { api } from '@/api';
 import type { Book } from '@shared/types';
 import BookCard from '@/components/BookCard.vue';
-import { Search, ArrowLeft } from 'lucide-vue-next';
+import { Search, ArrowLeft, Plus } from 'lucide-vue-next';
 
 const books = ref<Book[]>([]);
 const categories = ref<{ name: string; count: number }[]>([]);
 const activeCat = ref('');
 const keyword = ref('');
 const loading = ref(true);
+const uploading = ref(false);
+
+async function onAddPick(e: Event) {
+  const input = e.target as HTMLInputElement;
+  const files = Array.from(input.files || []).filter((f) => /\.txt$/i.test(f.name));
+  input.value = '';
+  if (!files.length) return;
+  uploading.value = true;
+  try {
+    const res = await api.upload(files);
+    const failed = res.results.filter((r) => r.status === 'error');
+    if (failed.length) alert(`部分导入失败:\n${failed.map((f) => `${f.fileName}:${f.error || '未知错误'}`).join('\n')}`);
+    [books.value, categories.value] = await Promise.all([api.listBooks(), api.categories()]);
+  } catch (err: any) {
+    alert(err?.message || '导入失败');
+  } finally {
+    uploading.value = false;
+  }
+}
 
 onMounted(async () => {
   try {
@@ -38,6 +57,11 @@ const filtered = computed(() => {
       <RouterLink to="/" class="btn !px-3"><ArrowLeft class="w-4 h-4" /></RouterLink>
       <h1 class="text-lg font-semibold">全部小说</h1>
       <span class="text-xs text-dim">{{ filtered.length }} 本</span>
+      <label class="btn btn-primary !py-1.5 !text-xs ml-auto cursor-pointer shrink-0">
+        <Plus class="w-4 h-4" />
+        {{ uploading ? '导入中…' : '添加小说' }}
+        <input type="file" multiple accept=".txt" class="hidden" :disabled="uploading" @change="onAddPick" />
+      </label>
     </header>
 
     <!-- 搜索 + 分类 -->

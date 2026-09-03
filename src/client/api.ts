@@ -70,6 +70,13 @@ export const api = {
     http<StatsSummary>(`/api/stats`),
   aiStatus: () =>
     http<{ provider: string; model: string; configured: boolean }>(`/api/ai/status`),
+  aiConfig: () => http<AIConfigInfo>(`/api/ai/config`),
+  saveAIConfig: (data: { provider?: string; baseUrl?: string; model?: string; apiKey?: string }) =>
+    http<{ ok: boolean } & AIConfigInfo>(`/api/ai/config`, { method: 'PUT', body: JSON.stringify(data) }),
+  aiTest: () =>
+    http<{ ok: boolean; model?: string; latencyMs?: number; reply?: string; error?: string }>(`/api/ai/test`, {
+      method: 'POST',
+    }),
   // ---- 封面 / 书籍信息 ----
   coverUrl: (bookId: number) => `/api/books/${bookId}/cover`,
   uploadCover: async (bookId: number, file: File) => {
@@ -91,6 +98,8 @@ export const api = {
     bookId: number,
     data: { title?: string; author?: string; category?: string; tags?: string[] },
   ) => http<{ ok: boolean; book: Book }>(`/api/books/${bookId}`, { method: 'PATCH', body: JSON.stringify(data) }),
+  deleteBook: (bookId: number) =>
+    http<{ ok: boolean; fileRemoved: boolean; title: string }>(`/api/books/${bookId}`, { method: 'DELETE' }),
 };
 
 export interface Bookmark {
@@ -122,4 +131,17 @@ export interface StatsSummary {
   totalSeconds: number;
   books: { id: number; title: string; seconds: number }[];
   days: { day: string; seconds: number }[];
+}
+
+// ---- AI 配置 ----
+export interface AIConfigInfo {
+  provider: string;
+  baseUrl: string;
+  model: string;
+  /** 服务端是否已存 key(含环境变量) */
+  hasApiKey: boolean;
+  /** 打码后的 key 提示,如 sk-…wxyz */
+  apiKeyHint: string;
+  configured: boolean;
+  supportedProviders: string[];
 }

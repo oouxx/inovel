@@ -5,12 +5,14 @@ import { createAnthropic } from '@ai-sdk/anthropic';
 import { createGoogleGenerativeAI as createGoogle } from '@ai-sdk/google';
 import { getDb } from '../database';
 import { readChapterContent } from '../scanner/scanner';
+import { loadAIConfigFile } from './configStore';
 
 /**
  * AI Service —— 阅读助手,不是聊天机器人
  *
- * - Vercel AI SDK 多 Provider(OpenAI / Anthropic / Google / OpenRouter / 兼容端点)
- * - API Key 只存服��端,绝不进前端
+ * - Vercel AI SDK 多 Provider(OpenAI 兼容 / Anthropic / Google / OpenRouter)
+ * - 配置来源:管理页配置(ai-config.json)> 环境变量 > 默认值,支持运行时修改
+ * - API Key 只存服务端,绝不进前端
  * - 上下文 = 当前章节 + 前后各 1 章;全书问答走关键词检索(检索 → 相关章节 → AI)
  * - summarize / characters / setting / explain 结果缓存(prompt_hash)
  */
@@ -21,11 +23,46 @@ export interface AIConfig {
   configured: boolean;
 }
 
+export const SUPPORTED_PROVIDERS = ['openai', 'anthropic', 'google', 'openrouter'] as const;
+
+/** 合并文件配置与环境变量后的最终生效配置 */
+export interface EffectiveAIConfig {
+  provider: string;
+  baseUrl: string;
+  model: string;
+  apiKey: string;
+}
+
+function envApiKey(provider: string): string {
+  switch (provider) {
+    case 'anthropic':
+      return process.env.ANTHROPIC_API_KEY || '';
+    case 'google':
+      return process.env.GOOGLE_API_KEY || process.env.GOOGLE_GENERATIVE_AI_API_KEY || '';
+    case 'openrouter':
+      return process.env.OPENROUTER_API_KEY || '';
+    default:
+      return process.env.OPENAI_API_KEY || '';
+  }
+}
+
+/** 文件配置 > 环境变量 > 默认值 */
+export function effectiveAIConfig(): EffectiveAIConfig {
+  const f = loadAIConfigFile();
+  const provider = (f.provider || process.env.AI_PROVIDER || 'openai').trim();
+  const baseUrl = (f.baseUrl || process.env.AI_BASE_URL || '').trim();
+  const model = (f.model || process.env.AI_MODEL || defaultModel(provider)).trim();
+  const apiKey = (f.apiKey || envApiKey(provider) || '').trim();
+  return { provider, baseUrl, model, apiKey };
+}
+
+export function isConfigured(cfg: EffectiveAIConfig): boolean {
+  return !!cfg.apiKey || (cfg.provider === 'openai' && !!cfg.baseUrl); // 自建兼容端点可不带 key
+}
+
 export function getAIConfig(): AIConfig {
-  const provider = process.env.AI_PROVIDER || 'openai';
-  const model = process.env.AI_MODEL || defaultModel(provider);
-  const configured = hasApiKey(provider);
-  return { provider, model, configured };
+  const cfg = effectiveAIConfig();
+  return { provider: cfg.provider, model: cfg.model, configured: isConfigured(cfg) };
 }
 
 function defaultModel(provider: string): string {
@@ -37,45 +74,29 @@ function defaultModel(provider: string): string {
   }
 }
 
-function hasApiKey(provider: string): boolean {
-  switch (provider) {
-    case 'anthropic': return !!process.env.ANTHROPIC_API_KEY;
-    case 'google': return !!(process.env.GOOGLE_API_KEY || process.env.GOOGLE_GENERATIVE_AI_API_KEY);
-    case 'openrouter': return !!process.env.OPENROUTER_API_KEY;
-    case 'openai': return !!(process.env.OPENAI_API_KEY || process.env.AI_BASE_URL); // 自建兼容端点可不带 key
-    default: return !!process.env.OPENAI_API_KEY;
-  }
-}
-
-function resolveModel(): LanguageModel {
-  const provider = process.env.AI_PROVIDER || 'openai';
-  const modelId = process.env.AI_MODEL || defaultModel(provider);
-  switch (provider) {
-    case 'anthropic': {
-      const anthropic = createAnthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-      return anthropic(modelId);
-    }
-    case 'google': {
-      const google = createGoogle({
-        apiKey: process.env.GOOGLE_API_KEY || process.env.GOOGLE_GENERATIVE_AI_API_KEY,
-      });
-      return google(modelId);
-    }
+/** 创建当前生效配置对应的 LanguageModel(供 routes 层测试连通) */
+export function resolveModel(cfg: EffectiveAIConfig): LanguageModel {
+  const baseURL = cfg.baseUrl || undefined;
+  switch (cfg.provider) {
+    case 'anthropic':
+      return createAnthropic({ apiKey: cfg.apiKey || 'missing', baseURL })(cfg.model);
+    case 'google':
+      return createGoogle({ apiKey: cfg.apiKey || 'missing', baseURL })(cfg.model);
     case 'openrouter': {
       const openrouter = createOpenAI({
-        apiKey: process.env.OPENROUTER_API_KEY,
-        baseURL: 'https://openrouter.ai/api/v1',
+        apiKey: cfg.apiKey,
+        baseURL: baseURL || 'https://openrouter.ai/api/v1',
       });
-      return openrouter.chat(modelId);
+      return openrouter.chat(cfg.model);
     }
     case 'openai':
     default: {
       const openai = createOpenAI({
-        apiKey: process.env.OPENAI_API_KEY,
-        baseURL: process.env.AI_BASE_URL, // OpenAI 兼容端点(通义/DeepSeek/Ollama 等)
+        apiKey: cfg.apiKey || undefined,
+        baseURL,
       });
       // .chat() → Chat Completions API(对第三方兼容端点兼容性最好)
-      return openai.chat(modelId);
+      return openai.chat(cfg.model);
     }
   }
 }
@@ -330,10 +351,11 @@ export async function streamAI(
   const cfg = getAIConfig();
   if (!cfg.configured) {
     throw new Error(
-      'AI 服务未配置。请设置环境变量 AI_PROVIDER / AI_MODEL / OPENAI_API_KEY(或对应 Provider 的 Key)后重启服务。',
+      'AI 服务未配置。请到「书库管理 → AI 阅读助手」填写 Provider / Base URL / Model / API Key 并保存。',
     );
   }
-  const model = resolveModel();
+  const full = effectiveAIConfig();
+  const model = resolveModel(full);
   const modelName = cfg.model;
 
   if (prompt.cacheable) {

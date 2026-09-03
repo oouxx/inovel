@@ -1,6 +1,8 @@
 import type { Book, ChapterMeta, ReadingProgress } from '../../shared/types';
 export type { ChapterMeta };
-import { getDb } from '../database';
+import { existsSync, unlinkSync, rmSync } from 'node:fs';
+import path from 'node:path';
+import { getDb, DATA_DIR } from '../database';
 
 export function listBooks(opts: { category?: string; q?: string; limit?: number; offset?: number } = {}): Book[] {
   const db = getDb();
@@ -24,6 +26,58 @@ export function listBooks(opts: { category?: string; q?: string; limit?: number;
 
 export function getBook(id: number): Book | null {
   return (getDb().query('SELECT * FROM books WHERE id = ?').get(id) as Book) || null;
+}
+
+const COVER_EXTS = ['.jpg', '.jpeg', '.png', '.webp', '.gif'];
+
+/**
+ * 删除书籍:清理磁盘文件(仅限 NOVELS_DIR 内)、封面及所有关联数据
+ * 返回是否成功移除了源文件
+ */
+export function deleteBook(id: number): { fileRemoved: boolean; title: string } {
+  const db = getDb();
+  const book = getBook(id);
+  if (!book) return { fileRemoved: false, title: '' };
+
+  // 1) 源文件:仅当位于 NOVELS_DIR 下才删,避免误删外部文件
+  let fileRemoved = false;
+  const novelsDir = path.resolve(process.env.NOVELS_DIR || path.join(DATA_DIR(), 'novels'));
+  const fp = path.resolve(book.file_path);
+  if (fp.startsWith(novelsDir + path.sep) || fp === novelsDir) {
+    try {
+      rmSync(fp, { force: true });
+      fileRemoved = true;
+    } catch {
+      // 删文件失败不阻断 DB 清理(下次扫描可能还会重新收录)
+    }
+  }
+
+  // 2) 封面文件
+  for (const ext of COVER_EXTS) {
+    const p = path.join(DATA_DIR(), 'covers', `${id}${ext}`);
+    if (existsSync(p)) {
+      try {
+        unlinkSync(p);
+      } catch {}
+    }
+  }
+
+  // 3) 数据库关联数据(章节/书签/进度/统计/AI 缓存/FTS 索引/主记录)
+  db.transaction(() => {
+    for (const sql of [
+      'DELETE FROM chapters WHERE book_id = ?',
+      'DELETE FROM bookmarks WHERE book_id = ?',
+      'DELETE FROM reading_progress WHERE book_id = ?',
+      'DELETE FROM reading_stats WHERE book_id = ?',
+      'DELETE FROM ai_cache WHERE book_id = ?',
+      'DELETE FROM books_fts WHERE book_id = ?',
+      'DELETE FROM books WHERE id = ?',
+    ]) {
+      db.query(sql).run(id);
+    }
+  })();
+
+  return { fileRemoved, title: book.title };
 }
 
 export function getBookChapters(bookId: number): ChapterMeta[] {

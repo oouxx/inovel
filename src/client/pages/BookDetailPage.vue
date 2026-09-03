@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue';
-import { useRoute } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
 import { api } from '@/api';
 import type { Book, ChapterMeta, ReadingProgress } from '@shared/types';
-import { ArrowLeft, BookOpen, PlayCircle, FileText, AlertTriangle, Pencil, ImagePlus, Check, X } from 'lucide-vue-next';
+import { ArrowLeft, BookOpen, PlayCircle, FileText, AlertTriangle, Pencil, ImagePlus, Check, X, Trash2 } from 'lucide-vue-next';
 
 const route = useRoute();
+const router = useRouter();
 const bookId = Number(route.params.id);
 
 const book = ref<Book | null>(null);
@@ -100,6 +101,22 @@ async function removeCover() {
   coverKey.value++;
 }
 
+// ---- 删除 ----
+const deletingBook = ref(false);
+async function deleteBook() {
+  if (!book.value || deletingBook.value) return;
+  if (!confirm(`确定删除《${book.value.title}》?\n将同时删除本地 TXT 文件、章节索引、书签与阅读进度,不可恢复。`)) return;
+  deletingBook.value = true;
+  try {
+    await api.deleteBook(bookId);
+    router.push('/books');
+  } catch (err: any) {
+    alert(err?.message || '删除失败');
+  } finally {
+    deletingBook.value = false;
+  }
+}
+
 // ---- 编辑 ----
 function startEdit() {
   editTitle.value = book.value?.title || '';
@@ -163,6 +180,13 @@ async function saveEdit() {
               <h2 class="text-2xl font-bold leading-snug">{{ book.title }}</h2>
               <button class="btn !p-1.5 !border-0 text-dim mt-1.5" title="编辑信息" @click="startEdit">
                 <Pencil class="w-3.5 h-3.5" />
+              </button>
+              <button
+                class="btn !p-1.5 !border-0 text-dim hover:text-red-500 mt-1.5"
+                title="删除这本书"
+                :disabled="deletingBook"
+                @click="deleteBook">
+                <Trash2 class="w-3.5 h-3.5" />
               </button>
             </div>
             <p class="text-sm text-dim mt-1">
