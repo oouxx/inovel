@@ -15,10 +15,7 @@ services:
       PORT: 8080
       DATA_DIR: /app/data
       NOVELS_DIR: /app/data/novels
-      # 服务器直连外网不通,运行时(AI 调用等)走宿主机 mihomo 代理
-      HTTP_PROXY: http://172.17.0.1:7890
-      HTTPS_PROXY: http://172.17.0.1:7890
-      NO_PROXY: localhost,127.0.0.1,::1
+      # 如需 AI 走代理,可在服务器 .env 里自行设置 HTTP_PROXY 等变量(env_file 自动注入)
     env_file:
       - path: .env
         required: false

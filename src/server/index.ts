@@ -152,5 +152,3 @@ if (existsSync(NOVELS_DIR)) {
 } else {
   console.log('   (novels 目录不存在,等待放入 TXT 后调用 POST /api/scanner/scan)');
 }
-
-export default app;

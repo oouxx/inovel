@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # 部署 novel-reader:提交代码 → GitHub Actions 构建镜像(ghcr.io)→ 服务器经 mihomo 代理拉取 → docker compose 部署
 # 用法: bash scripts/deploy.sh [--skip-clean] [--skip-push]
-# 环境变量: HOST(ssh 别名,默认 vps-ali) / PORT(宿主端口,默认 8090) / REMOTE_DIR(默认 /opt/novel-reader)
+# 环境变量: HOST(ssh 别名,默认 vps-rn) / PORT(宿主端口,默认 8090) / REMOTE_DIR(默认 /opt/novel-reader)
 set -euo pipefail
 
-HOST="${HOST:-vps-ali}"
+HOST="${HOST:-vps-rn}"
 PORT="${PORT:-8090}"
 REMOTE_DIR="${REMOTE_DIR:-/opt/novel-reader}"
 SKIP_CLEAN=false
@@ -53,20 +53,6 @@ rsync -az docker-compose.yml "$HOST:$REMOTE_DIR/"
 echo "    同步完成"
 
 echo "==> [5/6] 服务器拉取镜像并启动"
-# dockerd 直连外网不通,走宿主机 mihomo(127.0.0.1:7890)拉取 ghcr.io;drop-in 幂等
-ssh "$HOST" "
-  mkdir -p /etc/systemd/system/docker.service.d
-  cat > /etc/systemd/system/docker.service.d/proxy.conf <<'EOF'
-[Service]
-Environment=\"HTTP_PROXY=http://127.0.0.1:7890\"
-Environment=\"HTTPS_PROXY=http://127.0.0.1:7890\"
-Environment=\"NO_PROXY=localhost,127.0.0.1,::1\"
-EOF
-  if ! systemctl show docker --property=Environment | grep -q HTTP_PROXY; then
-    systemctl daemon-reload && systemctl restart docker && sleep 3
-    echo '    dockerd 代理已配置并重启'
-  fi
-"
 # 镜像刚发布可能有同步延迟,重试 3 次
 ssh "$HOST" "cd $REMOTE_DIR && PORT=$PORT docker compose pull" \
   || ssh "$HOST" "sleep 15 && cd $REMOTE_DIR && PORT=$PORT docker compose pull" \
