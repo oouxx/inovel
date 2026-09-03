@@ -40,6 +40,7 @@ const widths: Option<number>[] = [
 ];
 
 const themes: { value: ThemeName; label: string; bg: string; fg: string }[] = [
+  { value: 'auto', label: '跟随系统', bg: 'linear-gradient(90deg,#fff 50%,#232529 50%)', fg: '#555' },
   { value: 'light', label: '白色', bg: '#ffffff', fg: '#1c1c1e' },
   { value: 'sepia', label: '米色', bg: '#f7f4ec', fg: '#262019' },
   { value: 'gray', label: '深灰', bg: '#232529', fg: '#c9c9ce' },
@@ -67,7 +68,7 @@ const modes: Option<ReadMode>[] = [
         <!-- 主题 -->
         <div class="mb-4">
           <div class="text-xs text-dim mb-2">主题</div>
-          <div class="grid grid-cols-4 gap-2">
+          <div class="grid grid-cols-5 gap-2">
             <button
               v-for="t in themes"
               :key="t.value"
@@ -103,7 +104,7 @@ const modes: Option<ReadMode>[] = [
         <!-- 字号 -->
         <div class="mb-4">
           <div class="text-xs text-dim mb-2">字号</div>
-          <div class="grid grid-cols-4 gap-2">
+          <div class="grid grid-cols-5 gap-2">
             <button
               v-for="fs in fontSizes"
               :key="fs.value"
@@ -119,7 +120,7 @@ const modes: Option<ReadMode>[] = [
         <!-- 行距 -->
         <div class="mb-4">
           <div class="text-xs text-dim mb-2">行距</div>
-          <div class="grid grid-cols-4 gap-2">
+          <div class="grid grid-cols-5 gap-2">
             <button
               v-for="lh in lineHeights"
               :key="lh.value"

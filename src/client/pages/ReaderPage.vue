@@ -9,6 +9,7 @@ import ReaderSettingsPanel from '@/components/ReaderSettingsPanel.vue';
 import TocDrawer from '@/components/TocDrawer.vue';
 import {
   ArrowLeft, ListTree, Sparkles, Settings2, ChevronLeft, ChevronRight, Loader2, Sparkle,
+  BookmarkPlus, CheckCircle2,
 } from 'lucide-vue-next';
 
 const route = useRoute();
@@ -73,9 +74,13 @@ async function loadChapter(resetProgress: boolean) {
         pendingProgress.value = 1;
         targetPage.value = 0;
       } else {
-        // 恢复进度:优先 query.page(精确页),否则用户进度比例
+        // 恢复进度:优先 ?pos(书签/全文搜索跳转的章内比例)、query.page(精确页),否则用户进度比例
+        const posQ = route.query.pos ? Number(route.query.pos) : null;
         const qp = route.query.page ? Number(route.query.page) : null;
-        if (qp !== null && !Number.isNaN(qp)) {
+        if (posQ !== null && !Number.isNaN(posQ)) {
+          pendingProgress.value = Math.min(1, Math.max(0, posQ));
+          targetPage.value = 0;
+        } else if (qp !== null && !Number.isNaN(qp)) {
           pendingProgress.value = null;
           targetPage.value = Math.max(0, qp);
         } else {
@@ -327,12 +332,48 @@ async function aiExplain() {
 
 const aiPanel = ref<InstanceType<typeof AIPanel> | null>(null);
 
+// ---------- 书签 ----------
+const bookmarkToast = ref('');
+let toastTimer: any = null;
+async function addBookmark() {
+  const el = viewport.value;
+  let pos = 0;
+  if (settings.mode === 'paged') {
+    pos = pageCount.value > 1 ? page.value / (pageCount.value - 1) : 1;
+  } else if (el) {
+    const max = el.scrollHeight - el.clientHeight;
+    pos = max > 0 ? el.scrollTop / max : 1;
+  }
+  try {
+    const r = await api.addBookmark(bookId.value, { chapter_index: chapterIndex.value, position: pos });
+    bookmarkToast.value = r.duplicate ? '此位置已有书签' : '已添加书签';
+  } catch {
+    bookmarkToast.value = '添加失败';
+  }
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => (bookmarkToast.value = ''), 1800);
+}
+
+// ---------- 阅读统计心跳(每 30s,页面可见时) ----------
+let heartbeatTimer: any = null;
+function startHeartbeat() {
+  heartbeatTimer = setInterval(() => {
+    if (document.visibilityState !== 'visible') return;
+    api.heartbeat(bookId.value, 30);
+  }, 30_000);
+}
+
 // ---------- 主题 ----------
-watch(
-  () => settings.theme,
-  (t) => document.documentElement.setAttribute('data-theme', t),
-  { immediate: true },
-);
+function applyTheme() {
+  document.documentElement.setAttribute('data-theme', settings.effectiveTheme);
+}
+watch(() => settings.theme, applyTheme, { immediate: true });
+let mediaQuery: MediaQueryList | null = null;
+try {
+  mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+  mediaQuery.addEventListener?.('change', applyTheme);
+} catch {}
+onBeforeUnmount(() => mediaQuery?.removeEventListener?.('change', applyTheme));
 
 // ---------- 设置变化 → 重新分页 ----------
 watch(
@@ -375,7 +416,9 @@ onMounted(() => {
   window.addEventListener('keydown', onKeydown);
   document.addEventListener('mouseup', onMouseUp);
   nextTick(setupObserver);
+  startHeartbeat();
 });
+onBeforeUnmount(() => clearInterval(heartbeatTimer));
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKeydown);
   document.removeEventListener('mouseup', onMouseUp);
@@ -489,6 +532,17 @@ const paraKey = (i: number) => `p${i}`;
       </button>
     </div>
 
+    <!-- 书签 toast -->
+    <Transition name="fade">
+      <div
+        v-if="bookmarkToast"
+        class="absolute top-16 left-1/2 -translate-x-1/2 z-40 flex items-center gap-1.5 px-4 py-2 rounded-full text-sm shadow-lg"
+        style="background: var(--accent); color: #fff"
+      >
+        <CheckCircle2 class="w-4 h-4" /> {{ bookmarkToast }}
+      </div>
+    </Transition>
+
     <!-- 顶栏 -->
     <Transition name="fade">
       <header
@@ -509,6 +563,9 @@ const paraKey = (i: number) => `p${i}`;
         <div class="flex items-center gap-1">
           <button class="btn !border-0 !bg-transparent !px-2" title="目录 (T)" @click="showToc = !showToc">
             <ListTree class="w-5 h-5" />
+          </button>
+          <button class="btn !border-0 !bg-transparent !px-2" title="添加书签" @click="addBookmark">
+            <BookmarkPlus class="w-5 h-5" />
           </button>
           <button class="btn !border-0 !bg-transparent !px-2" title="AI 助手 (A)" @click="showAI = !showAI">
             <Sparkles class="w-5 h-5" :class="showAI && 'accent'" />

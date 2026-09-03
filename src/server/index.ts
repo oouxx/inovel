@@ -8,6 +8,9 @@ import { searchRoutes } from './routes/search';
 import { scannerRoutes } from './routes/scanner';
 import { aiRoutes } from './routes/ai';
 import { uploadRoutes } from './routes/upload';
+import { bookmarkRoutes, bookmarkDeleteRoutes } from './routes/bookmarks';
+import { statsRoutes } from './routes/stats';
+import { fullTextSearch, type FullTextResult } from './services/searchService';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 
@@ -32,20 +35,33 @@ api.route('/search', searchRoutes);
 api.route('/scanner', scannerRoutes);
 api.route('/ai', aiRoutes);
 api.route('/upload', uploadRoutes);
+api.route('/books', bookmarkRoutes); // /api/books/:id/bookmarks
+api.route('/bookmarks', bookmarkDeleteRoutes);
+api.route('/stats', statsRoutes);
+
+// GET /api/books/:id/fulltext?q= —— 全书全文搜索
+api.get('/books/:id/fulltext', (c) => {
+  const id = Number(c.req.param('id'));
+  const q = c.req.query('q') ?? '';
+  const result: FullTextResult = fullTextSearch(id, q);
+  return c.json(result);
+});
 api.get('/health', (c) => c.json({ ok: true, novelsDir: NOVELS_DIR }));
 app.route('/api', api);
 
 // ---------- 静态资源(Vue build 产物)+ SPA fallback ----------
 const distDir = path.resolve(import.meta.dir, '../../dist');
-const hasDist = existsSync(path.join(distDir, 'index.html'));
+const indexFile = path.join(distDir, 'index.html');
+const hasDist = existsSync(indexFile);
 
 if (hasDist) {
   const staticRoot = path.relative(process.cwd(), distDir);
+  const indexHtml = await Bun.file(indexFile).text();
   app.use('/*', serveStatic({ root: staticRoot }));
   // SPA fallback:非 /api 路由回 index.html
   app.get('/*', (c) => {
     if (c.req.path.startsWith('/api/')) return c.notFound();
-    return serveStatic({ root: staticRoot, rewriteRequestPath: () => '/index.html' })(c, () => {});
+    return c.html(indexHtml);
   });
 } else {
   app.get('/', (c) =>

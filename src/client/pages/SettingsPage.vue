@@ -2,10 +2,13 @@
 import { ref, onMounted, onUnmounted } from 'vue';
 import { api } from '@/api';
 import type { Book, ScanStatus } from '@shared/types';
-import { ArrowLeft, RefreshCw, Upload, Database, FolderOpen, CheckCircle2, AlertTriangle, XCircle } from 'lucide-vue-next';
+import { ArrowLeft, RefreshCw, Upload, Database, FolderOpen, CheckCircle2, AlertTriangle, XCircle, Sparkles, Clock } from 'lucide-vue-next';
+import { api as apiClient, type StatsSummary } from '@/api';
 
 const status = ref<ScanStatus & { novelsDir: string } | null>(null);
 const books = ref<Book[]>([]);
+const aiInfo = ref<{ provider: string; model: string; configured: boolean } | null>(null);
+const stats = ref<StatsSummary | null>(null);
 const scanning = ref(false);
 const dragOver = ref(false);
 const uploadResults = ref<{ fileName: string; status: string; chapterCount: number; encoding: string; error?: string }[]>([]);
@@ -32,6 +35,15 @@ function poll() {
 async function refresh() {
   status.value = await api.scanStatus();
   books.value = await api.listBooks();
+  aiInfo.value = await apiClient.aiStatus().catch(() => null);
+  stats.value = await apiClient.stats().catch(() => null);
+}
+
+function fmtDuration(s: number) {
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m} 分钟`;
+  const h = Math.floor(m / 60);
+  return `${h} 小时 ${m % 60} 分钟`;
 }
 
 async function triggerScan() {
@@ -98,6 +110,47 @@ function fmtSize(n: number) {
         {{ status.lastResult.unchanged }} · 移除 {{ status.lastResult.removed.length }} · 耗时
         {{ (status.lastResult.durationMs / 1000).toFixed(1) }}s
       </div>
+    </section>
+
+    <!-- AI 配置状态 -->
+    <section v-if="aiInfo" class="panel rounded-2xl p-5 mb-6">
+      <div class="flex items-center gap-3">
+        <Sparkles class="w-5 h-5 accent" />
+        <div class="flex-1">
+          <div class="font-medium">AI 阅读助手</div>
+          <div class="text-xs text-dim mt-0.5">
+            {{ aiInfo.provider }} · {{ aiInfo.model }}
+            <span :style="{ color: aiInfo.configured ? 'var(--accent)' : '#c58a2d' }">
+              · {{ aiInfo.configured ? '已配置' : '未配置(设置环境变量 AI_PROVIDER / API_KEY)' }}
+            </span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 阅读统计 -->
+    <section v-if="stats" class="panel rounded-2xl p-5 mb-6">
+      <div class="flex items-center gap-3 mb-3">
+        <Clock class="w-5 h-5 accent" />
+        <div class="font-medium">阅读统计</div>
+      </div>
+      <div class="grid grid-cols-2 gap-3 mb-3">
+        <div class="rounded-xl p-3" style="background: var(--bg-soft)">
+          <div class="text-xs text-dim">今日阅读</div>
+          <div class="text-lg font-semibold mt-1">{{ fmtDuration(stats.todaySeconds) }}</div>
+        </div>
+        <div class="rounded-xl p-3" style="background: var(--bg-soft)">
+          <div class="text-xs text-dim">累计阅读</div>
+          <div class="text-lg font-semibold mt-1">{{ fmtDuration(stats.totalSeconds) }}</div>
+        </div>
+      </div>
+      <div v-if="stats.books.length" class="text-xs divide-y" style="border-color: var(--border)">
+        <div v-for="b in stats.books.slice(0, 5)" :key="b.id" class="flex items-center py-2">
+          <RouterLink :to="`/books/${b.id}`" class="truncate hover:accent">{{ b.title }}</RouterLink>
+          <span class="ml-auto text-dim shrink-0">{{ fmtDuration(b.seconds) }}</span>
+        </div>
+      </div>
+      <div v-else class="text-xs text-dim">阅读时长大约每 30 秒自动记录一次,开始阅读后这里会有数据</div>
     </section>
 
     <!-- 批量导入 -->

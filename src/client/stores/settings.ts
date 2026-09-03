@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia';
 
-export type ThemeName = 'light' | 'sepia' | 'gray' | 'black';
+export type ThemeName = 'auto' | 'light' | 'sepia' | 'gray' | 'black';
 export type FontName = 'system' | 'serif' | 'sans';
 export type ReadMode = 'paged' | 'scroll';
 
@@ -47,8 +47,14 @@ export const useSettingsStore = defineStore('settings', {
           return `-apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif`;
       }
     },
-    themeBg(): string {
-      return `var(--bg)`;
+    /** auto:跟随系统亮暗 */
+    effectiveTheme(state): Exclude<ThemeName, 'auto'> {
+      if (state.theme !== 'auto') return state.theme;
+      try {
+        return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'gray' : 'sepia';
+      } catch {
+        return 'sepia';
+      }
     },
   },
   actions: {

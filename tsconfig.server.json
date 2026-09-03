@@ -3,8 +3,13 @@
     "target": "ES2022",
     "module": "ESNext",
     "moduleResolution": "bundler",
-    "lib": ["ES2023"],
-    "types": ["@types/bun"],
+    "lib": [
+      "ES2023",
+      "DOM"
+    ],
+    "types": [
+      "@types/bun"
+    ],
     "strict": true,
     "noEmit": true,
     "skipLibCheck": true,
@@ -13,5 +18,9 @@
     "allowImportingTsExtensions": true,
     "verbatimModuleSyntax": true
   },
-  "include": ["src/server/**/*.ts", "src/shared/**/*.ts", "scripts/**/*.ts"]
+  "include": [
+    "src/server/**/*.ts",
+    "src/shared/**/*.ts",
+    "scripts/**/*.ts"
+  ]
 }

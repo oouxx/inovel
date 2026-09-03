@@ -1,4 +1,5 @@
 import type { Book, ChapterMeta, ReadingProgress } from '../../shared/types';
+export type { ChapterMeta };
 import { getDb } from '../database';
 
 export function listBooks(opts: { category?: string; q?: string; limit?: number; offset?: number } = {}): Book[] {

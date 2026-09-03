@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { ref, watch, nextTick, computed } from 'vue';
-import { Sparkles, X, Send, Loader2, FileQuestion, Users, BookMarked, History } from 'lucide-vue-next';
+import { ref, watch, nextTick, computed, onMounted } from 'vue';
+import { Sparkles, X, Send, Loader2, FileQuestion, Users, BookMarked, History, Trash2 } from 'lucide-vue-next';
 import { streamAI } from '@/utils/ai';
 import { renderMarkdown } from '@/utils/markdown';
 
@@ -24,6 +24,46 @@ const input = ref('');
 const busy = ref(false);
 const scrollEl = ref<HTMLElement | null>(null);
 let abort: AbortController | null = null;
+
+// ---- 对话历史(按书持久化到 localStorage,上限 60 条) ----
+const historyKey = computed(() => `ai-chat-${props.bookId}`);
+
+function loadHistory() {
+  try {
+    const raw = localStorage.getItem(historyKey.value);
+    if (raw) {
+      const arr = JSON.parse(raw) as Msg[];
+      messages.value = arr.slice(-60).map((m) => ({ ...m, streaming: false }));
+      return;
+    }
+  } catch {}
+  messages.value = [];
+}
+
+function saveHistory() {
+  try {
+    localStorage.setItem(historyKey.value, JSON.stringify(messages.value.slice(-60)));
+  } catch {}
+}
+
+function clearHistory() {
+  abort?.abort();
+  busy.value = false;
+  messages.value = [];
+  try {
+    localStorage.removeItem(historyKey.value);
+  } catch {}
+}
+
+onMounted(loadHistory);
+
+// 消息变化 → 持久化(streaming 中的消息跳过部分内容也可,简单起见完成时保存)
+watch(
+  () => messages.value.length,
+  () => {
+    if (!messages.value.some((m) => m.streaming)) saveHistory();
+  },
+);
 
 const quickActions = [
   { mode: 'summarize', label: '总结本章', icon: FileQuestion },
@@ -102,12 +142,10 @@ function explainTerm(term: string, context: string) {
   setTimeout(() => run('explain', { term, context }), 50);
 }
 
+// 切换书籍时加载对应会话(同书跨章节保留对话)
 watch(
-  () => [props.bookId, props.chapterIndex],
-  () => {
-    // 切换章节清空会话
-    messages.value = [];
-  },
+  () => props.bookId,
+  () => loadHistory(),
 );
 
 defineExpose({ explainTerm });
@@ -129,7 +167,17 @@ const hasMessages = computed(() => messages.value.length > 0);
           <span class="text-sm font-medium">AI 阅读助手</span>
           <span class="text-[10px] text-dim">《{{ bookTitle }}》</span>
         </div>
-        <button class="btn !p-2 !border-0" @click="emit('close')"><X class="w-4 h-4" /></button>
+        <div class="flex items-center">
+          <button
+            v-if="hasMessages"
+            class="btn !p-2 !border-0 text-dim"
+            title="清空对话"
+            @click="clearHistory"
+          >
+            <Trash2 class="w-4 h-4" />
+          </button>
+          <button class="btn !p-2 !border-0" @click="emit('close')"><X class="w-4 h-4" /></button>
+        </div>
       </div>
 
       <!-- 快捷操作 -->

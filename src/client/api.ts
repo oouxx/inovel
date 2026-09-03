@@ -49,4 +49,56 @@ export const api = {
     if (!res.ok) throw new Error(`${res.status}`);
     return (await res.json()) as { results: { fileName: string; status: string; chapterCount: number; encoding: string; error?: string }[] };
   },
+  // ---- 书签 ----
+  listBookmarks: (bookId: number) =>
+    http<{ bookmarks: Bookmark[] }>(`/api/books/${bookId}/bookmarks`).then((r) => r.bookmarks),
+  addBookmark: (bookId: number, data: { chapter_index: number; position: number }) =>
+    http<{ ok: boolean; id: number; duplicate?: boolean }>(`/api/books/${bookId}/bookmarks`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  deleteBookmark: (id: number) => http<{ ok: boolean }>(`/api/bookmarks/${id}`, { method: 'DELETE' }),
+  // ---- 全文搜索 ----
+  fullText: (bookId: number, q: string) =>
+    http<FullTextResult>(`/api/books/${bookId}/fulltext?q=${encodeURIComponent(q)}`),
+  // ---- 阅读统计 ----
+  heartbeat: (bookId: number, seconds: number) =>
+    http<{ ok: boolean }>(`/api/stats/heartbeat`, { method: 'POST', body: JSON.stringify({ bookId, seconds }) }).catch(
+      () => undefined,
+    ),
+  stats: () =>
+    http<StatsSummary>(`/api/stats`),
+  aiStatus: () =>
+    http<{ provider: string; model: string; configured: boolean }>(`/api/ai/status`),
 };
+
+export interface Bookmark {
+  id: number;
+  book_id: number;
+  chapter_index: number;
+  position: number;
+  note: string | null;
+  created_at: number;
+  chapter_title: string | null;
+}
+
+export interface FullTextHit {
+  chapter_index: number;
+  title: string;
+  snippet: string;
+  position: number;
+  count: number;
+}
+
+export interface FullTextResult {
+  query: string;
+  total: number;
+  chapters: FullTextHit[];
+}
+
+export interface StatsSummary {
+  todaySeconds: number;
+  totalSeconds: number;
+  books: { id: number; title: string; seconds: number }[];
+  days: { day: string; seconds: number }[];
+}

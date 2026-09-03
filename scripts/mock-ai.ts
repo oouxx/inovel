@@ -8,7 +8,7 @@ Bun.serve({
     const url = new URL(req.url);
     console.log('[mock] =>', req.method, url.pathname);
     if (url.pathname === '/v1/chat/completions' && req.method === 'POST') {
-      const body = await req.json();
+      const body: any = await req.json();
       console.log('[mock] model:', body.model, '| system len:', body.messages?.[0]?.content?.length ?? 0, '| user len:', body.messages?.[body.messages.length - 1]?.content?.length ?? 0);
       const text = `## 剧情概述\n萧炎在本章中完成了修炼突破,这是mock测试响应。\n\n## 关键事件\n- **事件一**:测试内容\n- 事件二:测试内容\n\n## 人物变化\n萧炎状态提升。\n\n## 重要伏笔\n无明显伏笔。`;
       const id = 'chatcmpl-mock';

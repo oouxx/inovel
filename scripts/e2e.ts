@@ -96,8 +96,8 @@ const aiMsg = await page.locator('.ai-panel').textContent();
 // 未配置 → 提示;已配置(mock/真实)→ 正常总结输出
 const aiOk = aiMsg?.includes('未配置') || aiMsg?.includes('剧情概述') || false;
 ok('AI 面板响应正常(提示或总结)', aiOk);
-await page.locator('.ai-panel button').first().click(); // 关闭
-await page.waitForTimeout(300);
+await page.keyboard.press('Escape'); // 关闭 AI 面板
+await page.waitForTimeout(400);
 
 // 9. 设置面板
 await page.click('button[title="设置"]');

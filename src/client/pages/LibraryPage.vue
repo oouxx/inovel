@@ -4,7 +4,13 @@ import { api } from '@/api';
 import type { Book } from '@shared/types';
 import type { ReadingProgress } from '@shared/types';
 import BookCard from '@/components/BookCard.vue';
-import { Library, Search, Settings2, Compass } from 'lucide-vue-next';
+import { Library, Search, Settings2, Compass, Clock } from 'lucide-vue-next';
+import { api as api2, type StatsSummary } from '@/api';
+
+function fmtDur(s: number) {
+  const m = Math.round(s / 60);
+  return m < 60 ? `${m} 分钟` : `${Math.floor(m / 60)} 小时 ${m % 60} 分`;
+}
 
 interface ContinueItem {
   book: Book;
@@ -15,10 +21,12 @@ const books = ref<Book[]>([]);
 const categories = ref<{ name: string; count: number }[]>([]);
 const continueItems = ref<ContinueItem[]>([]);
 const loading = ref(true);
+const stats = ref<StatsSummary | null>(null);
 
 onMounted(async () => {
   try {
-    const [all, cats] = await Promise.all([api.listBooks(), api.categories()]);
+    const [all, cats, st] = await Promise.all([api.listBooks(), api.categories(), api.stats().catch(() => null)]);
+    stats.value = st;
     books.value = all;
     categories.value = cats;
     // 继续阅读:取有进度且进度 > 0 的书,按 updated_at 排序
@@ -61,7 +69,12 @@ watch(books, regroup, { immediate: true });
         </div>
         <div>
           <h1 class="text-lg font-semibold leading-tight">我的书架</h1>
-          <p class="text-xs text-dim">本地小说库 · {{ books.length }} 本</p>
+          <p class="text-xs text-dim">
+            本地小说库 · {{ books.length }} 本
+            <span v-if="stats && stats.todaySeconds > 60" class="inline-flex items-center gap-1 ml-1 accent">
+              <Clock class="w-3 h-3" /> 今日 {{ fmtDur(stats.todaySeconds) }}
+            </span>
+          </p>
         </div>
       </div>
       <nav class="flex items-center gap-2">

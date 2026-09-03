@@ -85,6 +85,14 @@ function migrate(db: Database) {
       UNIQUE(book_id, chapter_index, prompt_hash, model)
     );
 
+    CREATE TABLE IF NOT EXISTS reading_stats (
+      id       INTEGER PRIMARY KEY AUTOINCREMENT,
+      book_id  INTEGER NOT NULL,
+      day      TEXT NOT NULL,
+      seconds  INTEGER DEFAULT 0,
+      UNIQUE(book_id, day)
+    );
+
     CREATE VIRTUAL TABLE IF NOT EXISTS books_fts USING fts5(
       book_id UNINDEXED,
       title,
