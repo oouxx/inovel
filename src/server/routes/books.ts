@@ -1,14 +1,17 @@
 import { Hono } from 'hono';
-import { listBooks, getBook, getBookChapters, listCategories, deleteBook } from '../services/bookService';
+import { listBooks, getBook, getBookChapters, listCategories, deleteBook, countBooks } from '../services/bookService';
 
 export const bookRoutes = new Hono();
 
-/** GET /api/books?category=&q= */
+/** GET /api/books?category=&q=&limit=&offset= —— 带分页时响应附带 total */
 bookRoutes.get('/', (c) => {
   const category = c.req.query('category');
   const q = c.req.query('q');
-  const books = listBooks({ category, q });
-  return c.json({ books });
+  const limit = Number(c.req.query('limit')) || undefined;
+  const offset = Number(c.req.query('offset')) || undefined;
+  const books = listBooks({ category, q, limit, offset });
+  if (limit === undefined) return c.json({ books });
+  return c.json({ books, total: countBooks({ category, q }) });
 });
 
 /** GET /api/books/categories */

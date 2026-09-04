@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue';
+import { ref, computed, onMounted, onUnmounted } from 'vue';
 import { api, type StatsSummary, type AIConfigInfo } from '@/api';
 import type { Book, ScanStatus } from '@shared/types';
 import {
@@ -45,10 +45,32 @@ function poll() {
 
 async function refresh() {
   status.value = await api.scanStatus();
-  books.value = await api.listBooks();
+  const r = await api.listBooksPage({ limit: PAGE_SIZE, offset: (page.value - 1) * PAGE_SIZE });
+  total.value = r.total;
+  // 删除后当前页可能变空,回退一页
+  if (r.books.length === 0 && page.value > 1) {
+    page.value -= 1;
+    const r2 = await api.listBooksPage({ limit: PAGE_SIZE, offset: (page.value - 1) * PAGE_SIZE });
+    books.value = r2.books;
+    total.value = r2.total;
+  } else {
+    books.value = r.books;
+  }
   aiCfg.value = await api.aiConfig().catch(() => null);
   if (aiCfg.value) fillAIForm(aiCfg.value);
   stats.value = await api.stats().catch(() => null);
+}
+
+// ---- 分页 ----
+const PAGE_SIZE = 20;
+const page = ref(1);
+const total = ref(0);
+const totalPages = computed(() => Math.max(1, Math.ceil(total.value / PAGE_SIZE)));
+
+async function goPage(p: number) {
+  if (p < 1 || p > totalPages.value || p === page.value) return;
+  page.value = p;
+  await refresh();
 }
 
 function fmtDuration(s: number) {
@@ -342,7 +364,10 @@ async function removeBook(b: Book) {
 
     <!-- 书库列表 -->
     <section>
-      <h3 class="text-sm font-medium text-dim mb-3">书库 · {{ books.length }} 本</h3>
+      <div class="flex items-center justify-between mb-3">
+        <h3 class="text-sm font-medium text-dim">书库 · 共 {{ total }} 本</h3>
+        <span v-if="totalPages > 1" class="text-xs text-dim">第 {{ page }} / {{ totalPages }} 页</span>
+      </div>
       <div class="panel rounded-2xl divide-y overflow-hidden" style="border-color: var(--border)">
         <div v-for="b in books" :key="b.id" class="flex items-center gap-3 px-4 py-3 text-sm">
           <RouterLink :to="`/books/${b.id}`" class="font-medium truncate hover:accent max-w-[30%]">{{ b.title }}</RouterLink>
@@ -360,6 +385,13 @@ async function removeBook(b: Book) {
             <Trash2 class="w-4 h-4" />
           </button>
         </div>
+      </div>
+
+      <!-- 分页 -->
+      <div v-if="totalPages > 1" class="flex items-center justify-center gap-3 mt-3">
+        <button class="btn !py-1 !text-xs" :disabled="page <= 1" @click="goPage(page - 1)">上一页</button>
+        <span class="text-xs text-dim">{{ page }} / {{ totalPages }}</span>
+        <button class="btn !py-1 !text-xs" :disabled="page >= totalPages" @click="goPage(page + 1)">下一页</button>
       </div>
     </section>
   </div>

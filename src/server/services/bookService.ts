@@ -24,6 +24,25 @@ export function listBooks(opts: { category?: string; q?: string; limit?: number;
   return rows;
 }
 
+/** 与 listBooks 同条件的总数(分页用) */
+export function countBooks(opts: { category?: string; q?: string } = {}): number {
+  const db = getDb();
+  const conds: string[] = [];
+  const params: any[] = [];
+  if (opts.category !== undefined && opts.category !== '') {
+    conds.push('category = ?');
+    params.push(opts.category);
+  }
+  if (opts.q) {
+    conds.push('(title LIKE ? OR author LIKE ? OR category LIKE ? OR tags LIKE ?)');
+    const like = `%${opts.q}%`;
+    params.push(like, like, like, like);
+  }
+  const where = conds.length ? `WHERE ${conds.join(' AND ')}` : '';
+  const row = db.query(`SELECT COUNT(*) AS c FROM books ${where}`).get() as { c: number } | undefined;
+  return row?.c ?? 0;
+}
+
 export function getBook(id: number): Book | null {
   return (getDb().query('SELECT * FROM books WHERE id = ?').get(id) as Book) || null;
 }

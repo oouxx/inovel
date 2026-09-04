@@ -24,6 +24,14 @@ export const api = {
     if (params.q) qs.set('q', params.q);
     return http<{ books: Book[] }>(`/api/books?${qs}`).then((r) => r.books);
   },
+  listBooksPage: (params: { category?: string; q?: string; limit: number; offset: number }) => {
+    const qs = new URLSearchParams();
+    if (params.category) qs.set('category', params.category);
+    if (params.q) qs.set('q', params.q);
+    qs.set('limit', String(params.limit));
+    qs.set('offset', String(params.offset));
+    return http<{ books: Book[]; total: number }>(`/api/books?${qs}`);
+  },
   getBook: (id: number) => http<{ book: Book }>(`/api/books/${id}`).then((r) => r.book),
   getChapters: (bookId: number) =>
     http<{ book: { id: number; title: string }; chapters: ChapterMeta[] }>(
