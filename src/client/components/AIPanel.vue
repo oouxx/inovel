@@ -48,6 +48,7 @@ function saveHistory() {
 
 function clearHistory() {
   abort?.abort();
+  flushTicker();
   busy.value = false;
   messages.value = [];
   try {
@@ -74,10 +75,88 @@ const quickActions = [
 
 const html = (s: string) => renderMarkdown(s);
 
+// ---- 流式平滑(打字机效果)----
+// 上游可能是突发批量到达(免费模型节流/缓存回放),缓冲后按固定节奏逐字放出,
+// 保证视觉上始终是平滑的逐字输出,与网络层到达节奏解耦
+let pendingText = '';
+let smoother: ReturnType<typeof setInterval> | null = null;
+let smoothTarget: Msg | null = null;
+let sourceDone = false;
+let smoothError: string | null = null;
+
+function nearBottom(): boolean {
+  const el = scrollEl.value;
+  if (!el) return true;
+  return el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+}
+
 function scrollBottom() {
   nextTick(() => {
     scrollEl.value?.scrollTo({ top: scrollEl.value.scrollHeight });
   });
+}
+
+function ensureTicker() {
+  if (smoother) return;
+  smoother = setInterval(smoothTick, 30);
+}
+
+function smoothTick() {
+  const msg = smoothTarget;
+  if (!msg) {
+    stopTicker();
+    return;
+  }
+  if (pendingText.length) {
+    const stick = nearBottom();
+    // 自适应速率:积压越多放得越快,最多落后 ~1.5s;少量时 4字/30ms ≈ 133字/s
+    const rate = Math.max(4, Math.ceil(pendingText.length / 18));
+    msg.content += pendingText.slice(0, rate);
+    pendingText = pendingText.slice(rate);
+    if (stick) scrollBottom();
+  } else if (sourceDone) {
+    finishMsg();
+  }
+}
+
+function stopTicker() {
+  if (smoother) {
+    clearInterval(smoother);
+    smoother = null;
+  }
+}
+
+/** 缓冲排空后收尾:结束 streaming 状态、解除 busy、持久化 */
+function finishMsg() {
+  stopTicker();
+  const msg = smoothTarget;
+  smoothTarget = null;
+  if (msg) {
+    msg.content += pendingText;
+    msg.streaming = false;
+  }
+  pendingText = '';
+  busy.value = false;
+  if (msg) {
+    if (smoothError) messages.value.push({ role: 'error', content: smoothError });
+    smoothError = null;
+  }
+  saveHistory();
+  scrollBottom();
+}
+
+/** 立即冲刷(停止/清空/切换书时) */
+function flushTicker() {
+  const msg = smoothTarget;
+  stopTicker();
+  smoothTarget = null;
+  sourceDone = false;
+  pendingText = '';
+  smoothError = null;
+  if (msg) {
+    msg.streaming = false;
+    busy.value = false;
+  }
 }
 
 async function run(mode: string, extra: { question?: string; term?: string; context?: string } = {}) {
@@ -90,6 +169,11 @@ async function run(mode: string, extra: { question?: string; term?: string; cont
   messages.value.push(msg);
   scrollBottom();
 
+  pendingText = '';
+  sourceDone = false;
+  smoothError = null;
+  smoothTarget = msg;
+
   abort = new AbortController();
   await streamAI(
     { mode, bookId: props.bookId, chapterIndex: props.chapterIndex, ...extra },
@@ -98,27 +182,34 @@ async function run(mode: string, extra: { question?: string; term?: string; cont
         msg.cached = meta.cached;
       },
       onDelta: (delta) => {
-        msg.content += delta;
-        scrollBottom();
+        pendingText += delta;
+        ensureTicker();
       },
       onError: (m) => {
-        if (!msg.content) {
+        if (!msg.content && !pendingText) {
+          // 还没输出任何内容 → 替换为错误消息
+          stopTicker();
+          smoothTarget = null;
           messages.value.splice(messages.value.indexOf(msg), 1);
           messages.value.push({ role: 'error', content: m });
+          busy.value = false;
+        } else {
+          // 已有部分内容 → 冲刷完已有内容后追加错误提示
+          smoothError = m;
+          sourceDone = true;
+          ensureTicker();
         }
       },
       onDone: () => {
-        msg.streaming = false;
-        busy.value = false;
+        sourceDone = true;
+        if (!smoother) finishMsg(); // 无待冲刷内容时直接收尾
       },
     },
     abort.signal,
   );
-  if (msg.streaming) {
-    msg.streaming = false;
-    busy.value = false;
-  }
-  scrollBottom();
+  sourceDone = true;
+  // 流已结束:若缓冲已排空则立即收尾,否则交给 ticker 排完后收尾
+  if (smoothTarget === msg && !pendingText.length) finishMsg();
 }
 
 function labelOf(mode: string): string {
@@ -134,6 +225,7 @@ function send() {
 
 function stop() {
   abort?.abort();
+  flushTicker();
 }
 
 /** 选中文字 → AI 解释 */
@@ -145,7 +237,11 @@ function explainTerm(term: string, context: string) {
 // 切换书籍时加载对应会话(同书跨章节保留对话)
 watch(
   () => props.bookId,
-  () => loadHistory(),
+  () => {
+    abort?.abort();
+    flushTicker();
+    loadHistory();
+  },
 );
 
 defineExpose({ explainTerm });
