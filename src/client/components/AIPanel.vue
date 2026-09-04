@@ -1,8 +1,16 @@
 <script setup lang="ts">
-import { ref, watch, nextTick, computed, onMounted } from 'vue';
+import { ref, watch, nextTick, computed, onMounted, defineAsyncComponent } from 'vue';
 import { Sparkles, X, Send, Loader2, FileQuestion, Users, BookMarked, History, Trash2 } from 'lucide-vue-next';
 import { streamAI } from '@/utils/ai';
-import { renderMarkdown } from '@/utils/markdown';
+
+// markstream-vue 较重(约 750KB/92KB CSS),面板首次打开时才异步加载,不进阅读页主包
+const MarkdownRender = defineAsyncComponent(async () => {
+  const [{ default: Comp }] = await Promise.all([
+    import('markstream-vue'),
+    import('markstream-vue/index.css'),
+  ]);
+  return Comp;
+});
 
 const props = defineProps<{
   bookId: number;
@@ -48,7 +56,6 @@ function saveHistory() {
 
 function clearHistory() {
   abort?.abort();
-  flushTicker();
   busy.value = false;
   messages.value = [];
   try {
@@ -73,16 +80,9 @@ const quickActions = [
   { mode: 'recap', label: '回顾剧情', icon: History },
 ];
 
-const html = (s: string) => renderMarkdown(s);
-
-// ---- 流式平滑(打字机效果)----
-// 上游可能是突发批量到达(免费模型节流/缓存回放),缓冲后按固定节奏逐字放出,
-// 保证视觉上始终是平滑的逐字输出,与网络层到达节奏解耦
-let pendingText = '';
-let smoother: ReturnType<typeof setInterval> | null = null;
-let smoothTarget: Msg | null = null;
-let sourceDone = false;
-let smoothError: string | null = null;
+// ---- 流式渲染(markstream-vue)----
+// 渐进式渲染 / 打字机 / 平滑节奏 / 不完整语法容错均由库内部处理,
+// 这里只负责数据流(delta 追加)与智能滚动
 
 function nearBottom(): boolean {
   const el = scrollEl.value;
@@ -96,67 +96,10 @@ function scrollBottom() {
   });
 }
 
-function ensureTicker() {
-  if (smoother) return;
-  smoother = setInterval(smoothTick, 30);
-}
-
-function smoothTick() {
-  const msg = smoothTarget;
-  if (!msg) {
-    stopTicker();
-    return;
-  }
-  if (pendingText.length) {
-    const stick = nearBottom();
-    // 自适应速率:积压越多放得越快,最多落后 ~1.5s;少量时 4字/30ms ≈ 133字/s
-    const rate = Math.max(4, Math.ceil(pendingText.length / 18));
-    msg.content += pendingText.slice(0, rate);
-    pendingText = pendingText.slice(rate);
-    if (stick) scrollBottom();
-  } else if (sourceDone) {
-    finishMsg();
-  }
-}
-
-function stopTicker() {
-  if (smoother) {
-    clearInterval(smoother);
-    smoother = null;
-  }
-}
-
-/** 缓冲排空后收尾:结束 streaming 状态、解除 busy、持久化 */
-function finishMsg() {
-  stopTicker();
-  const msg = smoothTarget;
-  smoothTarget = null;
-  if (msg) {
-    msg.content += pendingText;
-    msg.streaming = false;
-  }
-  pendingText = '';
-  busy.value = false;
-  if (msg) {
-    if (smoothError) messages.value.push({ role: 'error', content: smoothError });
-    smoothError = null;
-  }
-  saveHistory();
-  scrollBottom();
-}
-
-/** 立即冲刷(停止/清空/切换书时) */
-function flushTicker() {
-  const msg = smoothTarget;
-  stopTicker();
-  smoothTarget = null;
-  sourceDone = false;
-  pendingText = '';
-  smoothError = null;
-  if (msg) {
-    msg.streaming = false;
-    busy.value = false;
-  }
+/** 用户本来就在底部才跟随滚动,上滑回看时不拽人 */
+function followScroll() {
+  const stick = nearBottom();
+  if (stick) scrollBottom();
 }
 
 async function run(mode: string, extra: { question?: string; term?: string; context?: string } = {}) {
@@ -169,11 +112,6 @@ async function run(mode: string, extra: { question?: string; term?: string; cont
   messages.value.push(msg);
   scrollBottom();
 
-  pendingText = '';
-  sourceDone = false;
-  smoothError = null;
-  smoothTarget = msg;
-
   abort = new AbortController();
   await streamAI(
     { mode, bookId: props.bookId, chapterIndex: props.chapterIndex, ...extra },
@@ -182,34 +120,28 @@ async function run(mode: string, extra: { question?: string; term?: string; cont
         msg.cached = meta.cached;
       },
       onDelta: (delta) => {
-        pendingText += delta;
-        ensureTicker();
+        msg.content += delta;
+        followScroll();
       },
       onError: (m) => {
-        if (!msg.content && !pendingText) {
-          // 还没输出任何内容 → 替换为错误消息
-          stopTicker();
-          smoothTarget = null;
-          messages.value.splice(messages.value.indexOf(msg), 1);
-          messages.value.push({ role: 'error', content: m });
-          busy.value = false;
-        } else {
-          // 已有部分内容 → 冲刷完已有内容后追加错误提示
-          smoothError = m;
-          sourceDone = true;
-          ensureTicker();
-        }
+        if (!msg.content) messages.value.splice(messages.value.indexOf(msg), 1);
+        messages.value.push({ role: 'error', content: m });
+        busy.value = false;
       },
       onDone: () => {
-        sourceDone = true;
-        if (!smoother) finishMsg(); // 无待冲刷内容时直接收尾
+        msg.streaming = false;
+        busy.value = false;
+        saveHistory();
       },
     },
     abort.signal,
   );
-  sourceDone = true;
-  // 流已结束:若缓冲已排空则立即收尾,否则交给 ticker 排完后收尾
-  if (smoothTarget === msg && !pendingText.length) finishMsg();
+  if (msg.streaming) {
+    // 中断/异常结束未触发 onDone
+    msg.streaming = false;
+    busy.value = false;
+  }
+  scrollBottom();
 }
 
 function labelOf(mode: string): string {
@@ -225,7 +157,6 @@ function send() {
 
 function stop() {
   abort?.abort();
-  flushTicker();
 }
 
 /** 选中文字 → AI 解释 */
@@ -239,7 +170,6 @@ watch(
   () => props.bookId,
   () => {
     abort?.abort();
-    flushTicker();
     loadHistory();
   },
 );
@@ -305,7 +235,20 @@ const hasMessages = computed(() => messages.value.length > 0);
           </div>
           <div v-else-if="m.role === 'error'" class="text-xs text-red-500 text-center py-1">{{ m.content }}</div>
           <div v-else class="flex justify-start">
-            <div class="max-w-[92%] text-sm leading-relaxed md-body" v-html="html(m.content || (m.streaming ? '正在分析……' : ''))" />
+            <div class="max-w-[92%] text-sm leading-relaxed">
+              <MarkdownRender
+                v-if="m.content"
+                class="md-stream"
+                mode="chat"
+                :content="m.content"
+                :final="!m.streaming"
+                typewriter="simple"
+                smooth-streaming="auto"
+                :fade="false"
+                :render-code-blocks-as-pre="true"
+              />
+              <span v-else-if="m.streaming" class="text-xs text-dim">正在分析…</span>
+            </div>
           </div>
         </template>
       </div>
@@ -368,63 +311,63 @@ const hasMessages = computed(() => messages.value.length > 0);
 .user-bubble {
   background: var(--accent-soft);
 }
-.md-body :deep(h1), .md-body :deep(h2) { font-size: 1em; font-weight: 700; margin: 0.8em 0 0.4em; }
-.md-body :deep(h3) { font-size: 0.95em; font-weight: 700; margin: 0.8em 0 0.4em; }
-.md-body :deep(h4) { font-size: 0.9em; font-weight: 600; margin: 0.6em 0 0.3em; }
-.md-body :deep(p) { margin: 0.4em 0; }
-.md-body :deep(ul), .md-body :deep(ol) { margin: 0.4em 0; padding-left: 1.2em; }
-.md-body :deep(li) { margin: 0.2em 0; }
-.md-body :deep(blockquote) {
-  border-left: 3px solid var(--border);
-  padding-left: 0.8em;
-  color: var(--text-dim);
-  margin: 0.5em 0;
+/* ---- markstream-vue 主题融合:把阅读主题映射进库的 CSS 变量 ---- */
+.md-stream {
+  /* 正文用主题色/字号(覆盖库默认的 1rem + 固定前景色) */
+  color: var(--text);
+  font-size: inherit;
+  --ms-text-body: 0.875rem;
+  --ms-text-h2: 1em;
+  --ms-text-h3: 0.95em;
+  --ms-text-h4: 0.9em;
+  --ms-flow-heading-2-mt: 1em;
+  --ms-flow-heading-2-mb: 0.5em;
+  --ms-flow-heading-3-mt: 0.9em;
+  --ms-flow-heading-3-mb: 0.45em;
+  --ms-flow-paragraph-y: 0.45em;
+  /* 派生色直接映射主题变量 */
+  --inline-code-bg: var(--bg-soft);
+  --inline-code-fg: var(--text);
+  --code-bg: var(--bg-soft);
+  --code-fg: var(--text);
+  --code-border: var(--border);
+  --table-border: var(--border);
+  --table-header-bg: var(--bg-soft);
+  --blockquote-border: var(--border);
+  --hr-border: var(--border);
+  --link-color: var(--accent);
+  --list-marker: var(--text-dim);
+  --list-counter-marker: var(--text-dim);
 }
-.md-body :deep(code) {
-  background: var(--bg-soft);
-  padding: 0.1em 0.35em;
-  border-radius: 4px;
-  font-size: 0.85em;
+.ai-panel .md-stream,
+.ai-panel .md-stream :deep(h1),
+.ai-panel .md-stream :deep(h2),
+.ai-panel .md-stream :deep(h3),
+.ai-panel .md-stream :deep(h4),
+.ai-panel .md-stream :deep(p),
+.ai-panel .md-stream :deep(li),
+.ai-panel .md-stream :deep(td),
+.ai-panel .md-stream :deep(strong) {
+  color: var(--text);
 }
-.md-body :deep(pre) {
-  background: var(--bg-soft);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 0.6em 0.8em;
-  overflow-x: auto;
-}
-.md-body :deep(pre code) {
-  background: none;
-  padding: 0;
-  font-size: 0.8em;
-}
-.md-body :deep(table) {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 0.85em;
-  margin: 0.6em 0;
-  display: block;
-  overflow-x: auto;
-}
-.md-body :deep(th),
-.md-body :deep(td) {
-  border: 1px solid var(--border);
-  padding: 0.35em 0.6em;
-  text-align: left;
-  vertical-align: top;
-}
-.md-body :deep(th) {
-  background: var(--bg-soft);
-  font-weight: 600;
-  white-space: nowrap;
-}
-.md-body :deep(a) {
+.ai-panel .md-stream :deep(a) {
   color: var(--accent);
-  text-decoration: underline;
-  text-underline-offset: 2px;
 }
-.md-body :deep(blockquote) { margin: 0.6em 0; }
-.md-body :deep(blockquote p) { margin: 0.2em 0; }
-.md-body :deep(hr) { border: none; border-top: 1px solid var(--border); margin: 0.8em 0; }
-.md-body :deep(strong) { font-weight: 600; }
+.ai-panel .md-stream :deep(pre),
+.ai-panel .md-stream :deep(code) {
+  background: var(--bg-soft);
+  color: var(--text);
+}
+.ai-panel .md-stream :deep(table),
+.ai-panel .md-stream :deep(th),
+.ai-panel .md-stream :deep(td) {
+  border-color: var(--border);
+}
+.ai-panel .md-stream :deep(th) {
+  background: var(--bg-soft);
+}
+.ai-panel .md-stream :deep(blockquote) {
+  border-left-color: var(--border);
+  color: var(--text-dim);
+}
 </style>
