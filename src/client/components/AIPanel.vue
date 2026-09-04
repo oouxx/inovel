@@ -272,7 +272,7 @@ const hasMessages = computed(() => messages.value.length > 0);
 .user-bubble {
   background: var(--accent-soft);
 }
-.md-body :deep(h2) { font-size: 1em; font-weight: 700; margin: 0.8em 0 0.4em; }
+.md-body :deep(h1), .md-body :deep(h2) { font-size: 1em; font-weight: 700; margin: 0.8em 0 0.4em; }
 .md-body :deep(h3) { font-size: 0.95em; font-weight: 700; margin: 0.8em 0 0.4em; }
 .md-body :deep(h4) { font-size: 0.9em; font-weight: 600; margin: 0.6em 0 0.3em; }
 .md-body :deep(p) { margin: 0.4em 0; }
@@ -290,6 +290,45 @@ const hasMessages = computed(() => messages.value.length > 0);
   border-radius: 4px;
   font-size: 0.85em;
 }
+.md-body :deep(pre) {
+  background: var(--bg-soft);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.6em 0.8em;
+  overflow-x: auto;
+}
+.md-body :deep(pre code) {
+  background: none;
+  padding: 0;
+  font-size: 0.8em;
+}
+.md-body :deep(table) {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85em;
+  margin: 0.6em 0;
+  display: block;
+  overflow-x: auto;
+}
+.md-body :deep(th),
+.md-body :deep(td) {
+  border: 1px solid var(--border);
+  padding: 0.35em 0.6em;
+  text-align: left;
+  vertical-align: top;
+}
+.md-body :deep(th) {
+  background: var(--bg-soft);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.md-body :deep(a) {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.md-body :deep(blockquote) { margin: 0.6em 0; }
+.md-body :deep(blockquote p) { margin: 0.2em 0; }
 .md-body :deep(hr) { border: none; border-top: 1px solid var(--border); margin: 0.8em 0; }
 .md-body :deep(strong) { font-weight: 600; }
 </style>
