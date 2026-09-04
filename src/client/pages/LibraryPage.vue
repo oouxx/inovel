@@ -4,7 +4,7 @@ import { api } from '@/api';
 import type { Book } from '@shared/types';
 import type { ReadingProgress } from '@shared/types';
 import BookCard from '@/components/BookCard.vue';
-import { Library, Search, Settings2, Compass, Clock } from 'lucide-vue-next';
+import { Library, Search, Settings2, Compass, Clock, LayoutGrid } from 'lucide-vue-next';
 import { api as api2, type StatsSummary } from '@/api';
 
 function fmtDur(s: number) {
@@ -78,6 +78,7 @@ watch(books, regroup, { immediate: true });
         </div>
       </div>
       <nav class="flex items-center gap-2">
+        <RouterLink to="/books" class="btn"><LayoutGrid class="w-4 h-4" /> 全部</RouterLink>
         <RouterLink to="/search" class="btn"><Search class="w-4 h-4" /> 搜索</RouterLink>
         <RouterLink to="/settings" class="btn"><Settings2 class="w-4 h-4" /> 管理</RouterLink>
       </nav>
