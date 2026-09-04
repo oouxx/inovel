@@ -343,6 +343,38 @@ export interface StreamResult {
   cached: boolean;
 }
 
+/** fullStream error 部件 → 可读的 Error(避免 AI SDK v5 静默吞错) */
+function formatAIError(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  if (typeof err === 'string') {
+    try {
+      const obj = JSON.parse(err);
+      return obj?.message || obj?.error?.message || err;
+    } catch {
+      return err;
+    }
+  }
+  try {
+    const s = JSON.stringify(err);
+    const obj = JSON.parse(s);
+    return obj?.message || obj?.error?.message || obj?.error?.code || s;
+  } catch {
+    return String(err);
+  }
+}
+
+/** 遍历 fullStream → 文本 delta;error 部件抛出(路由层会写入 SSE error 事件) */
+async function* iterateFullStream(result: ReturnType<typeof streamText>, onText?: (t: string) => void) {
+  for await (const part of result.fullStream) {
+    if (part.type === 'text-delta') {
+      onText?.(part.text);
+      yield part.text;
+    } else if (part.type === 'error') {
+      throw new Error(formatAIError(part.error));
+    }
+  }
+}
+
 export async function streamAI(
   prompt: BuiltPrompt,
   bookId: number,
@@ -365,21 +397,24 @@ export async function streamAI(
       return { textStream: replayStream(cached), model: modelName, cached: true };
     }
     const result = streamText({ model, system: prompt.system, prompt: prompt.user });
-    let full = '';
-    const textStream = {
-      async *[Symbol.asyncIterator]() {
-        for await (const delta of result.textStream) {
-          full += delta;
-          yield delta;
-        }
-        saveCache(bookId, chapterIndex, hash, modelName, full);
+    let fullText = '';
+    const textStream = iterateFullStream(result, (t) => {
+      fullText += t;
+    });
+    return {
+      textStream: {
+        async *[Symbol.asyncIterator]() {
+          for await (const delta of textStream) yield delta;
+          saveCache(bookId, chapterIndex, hash, modelName, fullText);
+        },
       },
+      model: modelName,
+      cached: false,
     };
-    return { textStream, model: modelName, cached: false };
   }
 
   const result = streamText({ model, system: prompt.system, prompt: prompt.user });
-  return { textStream: result.textStream, model: modelName, cached: false };
+  return { textStream: iterateFullStream(result), model: modelName, cached: false };
 }
 
 /** 缓存命中时模拟流式输出,保证前端体验一致 */
