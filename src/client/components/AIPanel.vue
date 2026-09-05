@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch, nextTick, computed, onMounted, defineAsyncComponent } from 'vue';
+import { ref, watch, nextTick, computed, onMounted, onUnmounted, defineAsyncComponent } from 'vue';
 import { Sparkles, X, Send, Loader2, FileQuestion, Users, BookMarked, History, Trash2 } from 'lucide-vue-next';
 import { streamAI } from '@/utils/ai';
 
@@ -176,6 +176,36 @@ watch(
 
 defineExpose({ explainTerm });
 
+// ---- iOS Safari 软键盘适配 ----
+// iOS 弹出软键盘不缩小布局视口,fixed 底部面板的输入行会被键盘整段盖住(打字看不到内容);
+// 用 visualViewport 把面板压缩、抬升到键盘上方。桌面/鼠标设备直接跳过,无副作用
+const panelEl = ref<HTMLElement | null>(null);
+
+function syncKeyboard() {
+  const el = panelEl.value;
+  const vv = window.visualViewport;
+  if (!el || !vv || !window.matchMedia('(pointer: coarse)').matches) return;
+  // 键盘遮挡高度 = 布局视口高 - 可视区顶部偏移 - 可视区高度
+  const covered = window.innerHeight - vv.offsetTop - vv.height;
+  if (covered > 150) {
+    el.style.height = `${vv.height}px`;
+    el.style.bottom = `${covered}px`;
+  } else {
+    // 键盘收起:还原为 CSS 里的 72vh 底部 sheet
+    el.style.height = '';
+    el.style.bottom = '';
+  }
+}
+
+onMounted(() => {
+  window.visualViewport?.addEventListener('resize', syncKeyboard);
+  window.visualViewport?.addEventListener('scroll', syncKeyboard);
+});
+onUnmounted(() => {
+  window.visualViewport?.removeEventListener('resize', syncKeyboard);
+  window.visualViewport?.removeEventListener('scroll', syncKeyboard);
+});
+
 const hasMessages = computed(() => messages.value.length > 0);
 </script>
 
@@ -183,6 +213,7 @@ const hasMessages = computed(() => messages.value.length > 0);
   <Transition name="panel">
     <aside
       v-if="open"
+      ref="panelEl"
       class="ai-panel fixed z-40 flex flex-col"
       style="background: var(--panel)"
     >

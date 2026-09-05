@@ -69,6 +69,12 @@ body {
   border-radius: 10px; padding: 8px 12px; font-size: 14px; outline: none; width: 100%;
 }
 .input:focus { border-color: var(--accent); }
+/* iOS Safari:聚焦 font-size < 16px 的输入框会强制放大页面(失焦后还常不还原),
+   fixed 面板按视口宽布局会被放大出屏,表现为"输入时宽度不自适应"。
+   触屏设备(可能弹软键盘的)一律 16px 起步规避该行为;鼠标设备维持 14px */
+@media (pointer: coarse) {
+  .input { font-size: 16px; }
+}
 
 /* 书籍封面(占位封面) */
 .book-cover {
