@@ -1,7 +1,5 @@
 // ---------- 书源存储与导入 ----------
 import { getDb } from '../database';
-import { readdirSync, readFileSync, existsSync } from 'node:fs';
-import path from 'node:path';
 import type { RawBookSource } from './types';
 import type { BookSource } from '../../shared/types';
 
@@ -38,22 +36,19 @@ export interface ImportResult {
   error?: string;
 }
 
-export function importSources(text: string, opts: { preserveState?: boolean } = {}): ImportResult {
+export function importSources(text: string): ImportResult {
   const { sources, error } = parseSourceJson(text);
   if (error || !sources.length) return { added: 0, updated: 0, total: 0, error: error || '无效书源' };
   const db = getDb();
   const now = Date.now();
   let added = 0;
   let updated = 0;
-  // preserveState: 已存在的源保留用户的启停状态(用于内置书源升级规则)
-  const stateExpr = opts.preserveState ? 'book_sources.enabled' : 'excluded.enabled';
-  const exploreExpr = opts.preserveState ? 'book_sources.enabled_explore' : 'excluded.enabled_explore';
   const upsert = db.prepare(
     `INSERT INTO book_sources (book_source_url, name, group_name, enabled, enabled_explore, custom_order, raw, last_import_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(book_source_url) DO UPDATE SET
-       name=excluded.name, group_name=excluded.group_name, enabled=${stateExpr},
-       enabled_explore=${exploreExpr}, custom_order=excluded.custom_order,
+       name=excluded.name, group_name=excluded.group_name, enabled=excluded.enabled,
+       enabled_explore=excluded.enabled_explore, custom_order=excluded.custom_order,
        raw=excluded.raw, last_import_at=excluded.last_import_at`,
   );
   db.transaction(() => {
@@ -74,25 +69,6 @@ export function importSources(text: string, opts: { preserveState?: boolean } = 
     }
   })();
   return { added, updated, total: sources.length };
-}
-
-/** 启动时导入内置书源(builtin 目录),已存在只升级规则、保留启停状态 */
-export function importBuiltinSources(): { file: string; result: ImportResult }[] {
-  const out: { file: string; result: ImportResult }[] = [];
-  try {
-    const dir = path.join(import.meta.dir, 'builtin');
-    if (!existsSync(dir)) return out;
-    for (const f of readdirSync(dir)) {
-      if (!f.endsWith('.json')) continue;
-      try {
-        const text = readFileSync(path.join(dir, f), 'utf-8');
-        out.push({ file: f, result: importSources(text, { preserveState: true }) });
-      } catch (e) {
-        console.error(`  内置书源 ${f} 导入失败:`, e);
-      }
-    }
-  } catch {}
-  return out;
 }
 
 export function listSources(): BookSource[] {

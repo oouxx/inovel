@@ -56,17 +56,15 @@ export function evalRule(env: RuleEnv, ruleStr: string | undefined, scope?: Rule
     }
   }
 
-  // 正则替换链(支持多段: ##re1##rep1##re2##rep2)
+  // 正则替换
   if (regexParts.length) {
-    for (let ri = 0; ri < regexParts.length; ri += 2) {
-      const re = replaceTemplates(env, regexParts[ri], {}, false);
-      const rep = regexParts[ri + 1] !== undefined ? replaceTemplates(env, regexParts[ri + 1], {}, false) : '';
-      try {
-        const r = new RegExp(re, 'g');
-        values = values.map((v) => v.replace(r, rep));
-      } catch {
-        env.messages.push(`正则无效: ${re}`);
-      }
+    const re = replaceTemplates(env, regexParts[0], {}, false);
+    const rep = regexParts.length > 1 ? replaceTemplates(env, regexParts[1], {}, false) : '';
+    try {
+      const r = new RegExp(re, 'g');
+      values = values.map((v) => v.replace(r, rep));
+    } catch {
+      env.messages.push(`正则无效: ${re}`);
     }
   }
   return values.map((v) => v.trim()).filter((v) => v !== '');
