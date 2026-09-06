@@ -171,11 +171,19 @@ async function importYiove() {
               <button class="btn !px-2.5" title="测试搜索" @click="test(s)"><PlayCircle class="w-4 h-4" /></button>
               <button
                 class="btn !px-2.5"
-                :class="s.enabled ? 'btn-primary' : ''"
                 :title="s.enabled ? '已启用,点击禁用' : '已禁用,点击启用'"
                 @click="toggle(s)"
               >
-                {{ s.enabled ? '启用' : '禁用' }}
+                <span
+                  class="relative inline-block w-7 h-4 rounded-full transition-colors shrink-0"
+                  :style="{ background: s.enabled ? 'var(--accent)' : 'rgba(128,128,128,.35)' }"
+                >
+                  <span
+                    class="absolute top-0.5 w-3 h-3 rounded-full bg-white transition-all"
+                    :style="{ left: s.enabled ? '14px' : '2px' }"
+                  ></span>
+                </span>
+                <span :class="s.enabled ? 'accent' : 'text-dim'">{{ s.enabled ? '启用中' : '已禁用' }}</span>
               </button>
               <button class="btn !px-2.5 text-red-500" title="删除" @click="remove(s)">
                 <Trash2 class="w-4 h-4" />
