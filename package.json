@@ -13,7 +13,8 @@
     "scan": "bun run scripts/scan.ts",
     "typecheck:server": "tsc -p tsconfig.server.json --noEmit",
     "typecheck:client": "vue-tsc -p tsconfig.client.json --noEmit",
-    "e2e:online": "bun run scripts/e2e-online.ts"
+    "e2e:online": "bun run scripts/e2e-online.ts",
+    "e2e:media": "bun run scripts/e2e-media.ts"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^2.0.8",

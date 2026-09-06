@@ -40,7 +40,12 @@
 ### 在线书源(Legado)
 
 - **书源管理**(`/sources`):网络导入(URL)/ 粘贴 JSON / 启用禁用 / 删除 / 连通性测试(真实执行一次搜索)
-- **在线搜索**(`/online`):多源并发搜索按源分组;详情弹窗(简介/目录/试读第一章);发现页分类浏览;一键「下载入库」
+- **在线搜索**(`/online`):多源并发搜索按源分组(标注 文字/音频/漫画 源类型);详情弹窗;发现页分类浏览
+- **文字源** → 一键「下载入库」→ 与本地 TXT 书完全一致的阅读体验
+- **音频源 / 漫画源**(bookSourceType=1/2)→「加入书架」在线流式阅读:
+  - 漫画:图片流式阅读页(防盗链图片代理,自动带源 Referer/Cookie),章节切换与滚动进度
+  - 音频:在线播放器(播放/暂停/±15s/拖动进度/自动下一集),播放秒数自动保存
+  - 在线书架:进度持久化(章节+位置),可移除
 - **下载入库**:抓取全书写为 TXT(章节标题规范为 `第N章` 保证识别),复用阅读器/AI/搜索/进度全链路;任务进度可查、可取消
 - **规则引擎**(`src/server/sources/`):
   - jsoup 默认规则(`class.x.0@tag.a@text`/`!N`排除/`[-1:0]`反转/`children[n]`/`text.关键词`/textNodes/ownText/all/规则级 `-` 反转)
@@ -49,7 +54,7 @@
   - `@js:`/`<js>`/`@js:`后缀(Rhino 式完成值语义)+ `java.*` API 子集(ajax/get/post/put/get/base64/encodeURI/DES-AES 解密等)
   - `{{key}}/{{page}}/{{$.jsonpath}}/{{book.x}}/{{js表达式}}` 模板;URL options(method/body/charset/headers);GBK/Big5 请求与响应解码(GET 关键词按目标编码百分号)
   - `@put:{}`/`@get:{}` 跨阶段变量、Cookie 持久化、`concurrentRate` 限流、`nextTocUrl`/`nextContentUrl` 翻页
-- **已知限制**:需 WebView 人机验证/浏览器交互的源(如起点 Cookie 验证)会明确报错;音频(=1)/漫画(=2)源不支持;需登录 UI 配置的源(如番茄密钥)暂不支持
+- **已知限制**:需 WebView 人机验证/浏览器交互的源(如起点 Cookie 验证)会明确报错;音频/漫画源为在线流式阅读(不提供下载入库);需登录 UI 配置的源(如番茄密钥)暂不支持
 - **网络路径**:实测不同源的网络要求不同 —— 如 cool18 仅代理可达(直连不通),得奇/就爱文学等国内站仅直连可达(拒绝境外代理 IP)。代理统一走容器/系统的 `http_proxy` 环境变量(由 mihomo 等代理分流),`NO_PROXY` 可排除特定域名
 
 ## 🚀 快速开始
@@ -132,7 +137,7 @@ Bun + Hono
 src/
 ├── client/          Vue 3 前端(pages / components / stores / router)
 ├── server/          Bun 后端(routes / services / scanner / parser / ai / database)
-│   └── sources/     在线书源引擎(store / http / rules / engine / downloader)
+│   └── sources/     在线书源引擎(store / http / rules / engine / library / downloader)
 └── shared/          共享类型
 scripts/             开发辅助(dev / e2e / fixtures)
 ```
@@ -144,6 +149,7 @@ bun run scripts/gen-fixtures.ts /tmp/novel-test   # 生成 6 种编码/章节结
 NOVELS_DIR=/tmp/novel-test bun src/server/index.ts
 bun run scripts/e2e.ts       # 阅读/搜索/设置/手机端 全流程(21 项)
 bun run e2e:online           # 真实书源全链路:导入→搜索→详情→目录→试读→下载入库(依赖网络)
+bun run e2e:media            # 音频/漫画在线书架全链路(mock 源:媒体解析/图片音频代理/进度)
                              # 默认源: yiove 82c1edb2…;可传参换源与搜索词:
                              #   bun run scripts/e2e-online.ts https://shuyuan-api.yiove.com/import/book-source/2455d578-aa96-4b4f-87b4-cdd079de9bc8
 bun scripts/mock-ai.ts &     # mock OpenAI 端点

@@ -4,6 +4,8 @@ import type {
   BookSource,
   ChapterMeta,
   OnlineBookInfo,
+  OnlineChapterMedia,
+  OnlineLibraryBook,
   OnlineChapter,
   OnlineDownloadTask,
   OnlineExploreCategory,
@@ -169,6 +171,24 @@ export const api = {
     }),
   downloadTasks: () => http<{ tasks: OnlineDownloadTask[] }>(`/api/online/tasks`).then((r) => r.tasks),
   cancelDownload: (id: string) => http<{ ok: boolean }>(`/api/online/tasks/${id}/cancel`, { method: 'POST' }),
+  // ---- 在线书架(音频/漫画流式阅读) ----
+  onlineLibrary: () => http<{ books: OnlineLibraryBook[] }>(`/api/online/library`).then((r) => r.books),
+  addToLibrary: (data: { source: string; bookUrl: string; name: string; author: string; coverUrl: string; sourceType: number }) =>
+    http<{ ok: boolean; book: OnlineLibraryBook }>(`/api/online/library`, { method: 'POST', body: JSON.stringify(data) }),
+  onlineLibraryBook: (id: number) =>
+    http<{ book: OnlineLibraryBook; chapters: OnlineChapter[] }>(`/api/online/library/${id}`),
+  removeFromLibrary: (id: number) => http<{ ok: boolean }>(`/api/online/library/${id}`, { method: 'DELETE' }),
+  onlineMedia: (source: string, url: string, title: string, name?: string, author?: string) =>
+    http<OnlineChapterMedia>(
+      `/api/online/media?source=${encodeURIComponent(source)}&url=${encodeURIComponent(url)}&title=${encodeURIComponent(title)}&name=${encodeURIComponent(name ?? '')}&author=${encodeURIComponent(author ?? '')}`,
+    ),
+  onlineImgUrl: (u: string, source: string, ref: string) =>
+    `/api/online/img?u=${encodeURIComponent(u)}&source=${encodeURIComponent(source)}&ref=${encodeURIComponent(ref ?? '')}`,
+  onlineAudioUrl: (u: string, source: string, ref: string) =>
+    `/api/online/audio?u=${encodeURIComponent(u)}&source=${encodeURIComponent(source)}&ref=${encodeURIComponent(ref ?? '')}`,
+  onlineProgress: (id: number) => http<{ progress: { chapter_index: number; position: number } | null }>(`/api/online/progress/${id}`),
+  saveOnlineProgress: (id: number, chapter_index: number, position: number) =>
+    http<{ ok: boolean }>(`/api/online/progress/${id}`, { method: 'PUT', body: JSON.stringify({ chapter_index, position }) }),
 };
 
 export interface Bookmark {

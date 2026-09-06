@@ -7,11 +7,16 @@ import type {
   OnlineChapter,
   OnlineDownloadTask,
   OnlineExploreCategory,
+  OnlineLibraryBook,
   OnlineSearchBook,
   OnlineSearchResult,
   BookSource,
 } from '@shared/types';
-import { Search, ArrowLeft, BookOpen, Settings2, Download, X, Compass, RefreshCw, BookText } from 'lucide-vue-next';
+import { Search, ArrowLeft, BookOpen, Settings2, Download, X, Compass, RefreshCw, BookText, Headphones, Image as ImageIcon, BookMarked, Trash2 } from 'lucide-vue-next';
+
+function typeLabel(t: number) {
+  return t === 1 ? '音频' : t === 2 ? '漫画' : '文字';
+}
 
 const router = useRouter();
 const q = ref('');
@@ -24,7 +29,9 @@ const tasks = ref<OnlineDownloadTask[]>([]);
 let taskTimer: any = null;
 
 // ---- 详情弹窗 ----
-const modalBook = ref<{ source: string; name: string; author: string; bookUrl: string; coverUrl?: string } | null>(null);
+const modalBook = ref<{ source: string; name: string; author: string; bookUrl: string; coverUrl?: string; sourceType: number } | null>(null);
+const shelf = ref<OnlineLibraryBook[]>([]);
+const shelfAdded = ref(false);
 const modalLoading = ref(false);
 const modalInfo = ref<OnlineBookInfo | null>(null);
 const modalToc = ref<OnlineChapter[] | null>(null);
@@ -39,8 +46,12 @@ const exploreCatUrl = ref('');
 const exploreBooks = ref<OnlineSearchBook[]>([]);
 const exploreLoading = ref(false);
 
+async function refreshShelf() {
+  shelf.value = await api.onlineLibrary().catch(() => []);
+}
 onMounted(async () => {
   sources.value = await api.onlineSources().catch(() => []);
+  await refreshShelf();
   await refreshTasks();
   taskTimer = setInterval(refreshTasks, 2000);
 });
@@ -64,12 +75,13 @@ async function doSearch() {
   }
 }
 
-function openModal(source: string, b: OnlineSearchBook) {
-  modalBook.value = { source, name: b.name, author: b.author, bookUrl: b.bookUrl, coverUrl: b.coverUrl };
+function openModal(source: string, b: OnlineSearchBook, sourceType = 0) {
+  modalBook.value = { source, name: b.name, author: b.author, bookUrl: b.bookUrl, coverUrl: b.coverUrl, sourceType };
   modalInfo.value = null;
   modalToc.value = null;
   modalPreview.value = null;
   downloadStarted.value = false;
+  shelfAdded.value = false;
   loadDetail();
 }
 
@@ -118,6 +130,29 @@ async function previewFirst() {
   } finally {
     modalPreviewLoading.value = false;
   }
+}
+
+async function addToShelf() {
+  if (!modalBook.value) return;
+  try {
+    await api.addToLibrary({
+      source: modalBook.value.source,
+      bookUrl: modalBook.value.bookUrl,
+      name: modalInfo.value?.name || modalBook.value.name,
+      author: modalInfo.value?.author || modalBook.value.author,
+      coverUrl: modalInfo.value?.coverUrl || modalBook.value.coverUrl || '',
+      sourceType: modalBook.value.sourceType,
+    });
+    shelfAdded.value = true;
+    await refreshShelf();
+  } catch (e: any) {
+    alert(e?.message || '加入书架失败');
+  }
+}
+
+async function removeShelf(id: number) {
+  await api.removeFromLibrary(id).catch(() => undefined);
+  await refreshShelf();
 }
 
 async function download() {
@@ -171,6 +206,7 @@ const activeTasks = computed(() => tasks.value.filter((t) => ['pending', 'runnin
 const finishedTasks = computed(() => tasks.value.filter((t) => !['pending', 'running'].includes(t.status)).slice(0, 5));
 const exploreSourceOptions = computed(() => sources.value.filter((s) => s.enabled && s.enabledExplore));
 const enabledSourceCount = computed(() => sources.value.filter((s) => s.enabled).length);
+const modalType = computed(() => modalBook.value?.sourceType ?? 0);
 </script>
 
 <template>
@@ -187,6 +223,33 @@ const enabledSourceCount = computed(() => sources.value.filter((s) => s.enabled)
       <p class="text-xs text-dim mb-4">先到书源管理导入 Legado 书源(JSON 链接或文本)</p>
       <RouterLink to="/sources" class="btn btn-primary">去导入书源</RouterLink>
     </div>
+
+    <!-- 在线书架 -->
+    <section v-if="shelf.length" class="mb-6">
+      <h2 class="text-sm font-medium text-dim mb-2">在线书架</h2>
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+        <div v-for="b in shelf" :key="b.id" class="panel rounded-2xl p-3 flex items-center gap-3">
+          <button class="flex items-center gap-3 min-w-0 flex-1 text-left" @click="router.push(`/reader/online/${b.id}/${b.progress?.chapter_index ?? 0}`)">
+            <div
+              class="w-10 h-14 rounded-md flex items-center justify-center text-white shrink-0"
+              style="background: linear-gradient(145deg, hsl(28 45% 55%), hsl(10 40% 40%))"
+            >
+              <Headphones v-if="b.sourceType === 1" class="w-4 h-4" />
+              <ImageIcon v-else-if="b.sourceType === 2" class="w-4 h-4" />
+              <span v-else class="font-semibold">{{ (b.name || '?').slice(0, 1) }}</span>
+            </div>
+            <div class="min-w-0 flex-1">
+              <div class="text-sm font-medium truncate">{{ b.name }}</div>
+              <div class="text-xs text-dim mt-0.5 truncate">
+                {{ b.author }}<span v-if="b.sourceType === 1"> · 音频</span><span v-else-if="b.sourceType === 2"> · 漫画</span>
+                <span v-if="b.progress && b.progress.chapter_index > 0"> · 已读 {{ b.progress.chapter_index }} 章</span>
+              </div>
+            </div>
+          </button>
+          <button class="btn !px-2 text-dim" title="移出书架" @click="removeShelf(b.id)"><Trash2 class="w-4 h-4" /></button>
+        </div>
+      </div>
+    </section>
 
     <form class="flex gap-2 mb-6" @submit.prevent="doSearch">
       <div class="relative flex-1">
@@ -287,6 +350,8 @@ const enabledSourceCount = computed(() => sources.value.filter((s) => s.enabled)
       <section v-for="r in results" :key="r.sourceUrl" class="mb-8">
         <div class="flex items-center gap-2 mb-2">
           <span class="text-sm font-medium">{{ r.sourceName }}</span>
+          <span v-if="r.sourceType === 1" class="text-xs text-dim">音频源</span>
+          <span v-else-if="r.sourceType === 2" class="text-xs text-dim">漫画源</span>
           <span v-if="!r.error" class="text-xs text-dim">{{ r.books.length }} 条 · {{ r.costMs }}ms</span>
           <span v-else class="text-xs text-red-500 truncate">{{ r.error }}</span>
         </div>
@@ -294,7 +359,7 @@ const enabledSourceCount = computed(() => sources.value.filter((s) => s.enabled)
           <li v-for="(b, i) in r.books" :key="i">
             <button
               class="w-full flex items-center gap-3 py-3 text-left hover:opacity-80"
-              @click="openModal(r.sourceUrl, b)"
+              @click="openModal(r.sourceUrl, b, r.sourceType)"
             >
               <div
                 class="w-10 h-14 rounded-md flex items-center justify-center text-white text-lg font-semibold shrink-0"
@@ -354,15 +419,24 @@ const enabledSourceCount = computed(() => sources.value.filter((s) => s.enabled)
             <button class="btn" :disabled="modalLoading" @click="loadToc">
               <RefreshCw class="w-4 h-4" /> {{ modalToc ? `目录(${modalToc.filter((c) => c.url).length})` : '查看目录' }}
             </button>
-            <button class="btn" :disabled="modalLoading || modalPreviewLoading" @click="previewFirst">
-              <BookOpen class="w-4 h-4" /> 试读第一章
-            </button>
-            <button class="btn btn-primary" :disabled="modalLoading" @click="download">
-              <Download class="w-4 h-4" /> 下载入库
-            </button>
+            <template v-if="modalType === 0">
+              <button class="btn" :disabled="modalLoading || modalPreviewLoading" @click="previewFirst">
+                <BookOpen class="w-4 h-4" /> 试读第一章
+              </button>
+              <button class="btn btn-primary" :disabled="modalLoading" @click="download">
+                <Download class="w-4 h-4" /> 下载入库
+              </button>
+            </template>
+            <template v-else>
+              <span class="btn !cursor-default text-xs text-dim self-center">{{ modalType === 1 ? '音频源' : '漫画源' }} · 在线阅读</span>
+              <button class="btn btn-primary" :disabled="modalLoading" @click="addToShelf">
+                <BookMarked class="w-4 h-4" /> 加入书架
+              </button>
+            </template>
           </div>
 
           <p v-if="downloadStarted" class="text-xs accent mb-3">已创建下载任务,可在页面下方任务列表查看进度</p>
+          <p v-if="shelfAdded" class="text-xs accent mb-3">已加入书架,可在页面上方「在线书架」打开阅读</p>
 
           <!-- 试读 -->
           <div v-if="modalPreview" class="mb-4">

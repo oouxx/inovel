@@ -7,6 +7,7 @@ export const router = createRouter({
     { path: '/books', name: 'books', component: () => import('@/pages/BooksPage.vue') },
     { path: '/books/:id', name: 'book-detail', component: () => import('@/pages/BookDetailPage.vue') },
     { path: '/reader/:bookId/:chapterIndex', name: 'reader', component: () => import('@/pages/ReaderPage.vue') },
+    { path: '/reader/online/:id/:chapterIndex', name: 'online-reader', component: () => import('@/pages/OnlineReaderPage.vue') },
     { path: '/search', name: 'search', component: () => import('@/pages/SearchPage.vue') },
     { path: '/online', name: 'online', component: () => import('@/pages/OnlinePage.vue') },
     { path: '/sources', name: 'sources', component: () => import('@/pages/SourcesPage.vue') },

@@ -14,10 +14,21 @@ import {
   getBookInfo,
   getToc,
   getChapterContent,
+  getChapterMedia,
   getExplore,
   exploreBooks,
 } from '../sources/engine';
 import { createDownloadTask, listDownloadTasks, cancelDownloadTask } from '../sources/downloader';
+import {
+  addOnlineBook,
+  deleteOnlineBook,
+  getOnlineBook,
+  getOnlineBookToc,
+  getOnlineProgress,
+  listOnlineBooks,
+  saveOnlineProgress,
+} from '../sources/library';
+import { sourceFetchBinary, sourceFetchStream } from '../sources/http';
 
 export const onlineRoutes = new Hono();
 
@@ -146,6 +157,7 @@ onlineRoutes.get('/search', async (c) => {
         results.push({
           sourceUrl: url,
           sourceName: raw?.bookSourceName ?? url,
+          sourceType: r.sourceType,
           error: r.books.length ? null : r.messages.join('; ') || '未搜索到结果',
           costMs: r.costMs,
           books: r.books,
@@ -154,6 +166,7 @@ onlineRoutes.get('/search', async (c) => {
         results.push({
           sourceUrl: url,
           sourceName: raw?.bookSourceName ?? url,
+          sourceType: 0,
           error: String(e?.message || e).slice(0, 200),
           costMs: Date.now() - t0,
           books: [],
@@ -260,7 +273,11 @@ onlineRoutes.post('/download', async (c) => {
   const source = dec(String(body?.source ?? ''));
   const bookUrl = dec(String(body?.bookUrl ?? ''));
   if (!source || !bookUrl) return c.json({ error: '缺少 source / bookUrl' }, 400);
-  if (!getSourceRaw(source)) return c.json({ error: '书源不存在' }, 404);
+  const rawDl = getSourceRaw(source);
+  if (!rawDl) return c.json({ error: '书源不存在' }, 404);
+  const st = Number((rawDl as any).bookSourceType ?? 0) || 0;
+  if (st === 1) return c.json({ error: '音频源请在详情页使用「加入书架」在线收听' }, 400);
+  if (st === 2) return c.json({ error: '漫画源请在详情页使用「加入书架」在线阅读' }, 400);
   const task = createDownloadTask(source, bookUrl);
   return c.json({ ok: true, task });
 });
@@ -269,5 +286,121 @@ onlineRoutes.get('/tasks', (c) => c.json({ tasks: listDownloadTasks() }));
 
 onlineRoutes.post('/tasks/:id/cancel', (c) => {
   if (!cancelDownloadTask(c.req.param('id'))) return c.json({ error: 'not found' }, 404);
+  return c.json({ ok: true });
+});
+// ---------- 在线书架(音频/漫画流式阅读) ----------
+onlineRoutes.get('/library', (c) => c.json({ books: listOnlineBooks() }));
+
+onlineRoutes.post('/library', async (c) => {
+  const body = await c.req.json().catch(() => null);
+  const source = dec(String(body?.source ?? ''));
+  const bookUrl = dec(String(body?.bookUrl ?? ''));
+  const name = String(body?.name ?? '').trim();
+  const author = String(body?.author ?? '').trim();
+  const coverUrl = String(body?.coverUrl ?? '').trim();
+  const sourceType = Number(body?.sourceType ?? 0) || 0;
+  if (!source || !bookUrl || !name) return c.json({ error: '缺少 source / bookUrl / name' }, 400);
+  const raw = getSourceRaw(source);
+  if (!raw) return c.json({ error: '书源不存在' }, 404);
+  try {
+    const book = await addOnlineBook(source, bookUrl, name, author, coverUrl, sourceType);
+    return c.json({ ok: true, book });
+  } catch (e: any) {
+    return c.json({ error: String(e?.message || e).slice(0, 300) }, 502);
+  }
+});
+
+onlineRoutes.get('/library/:id', (c) => {
+  const book = getOnlineBook(Number(c.req.param('id')));
+  if (!book) return c.json({ error: 'not found' }, 404);
+  return c.json({ book, chapters: getOnlineBookToc(book.id) });
+});
+
+onlineRoutes.delete('/library/:id', (c) => {
+  if (!deleteOnlineBook(Number(c.req.param('id')))) return c.json({ error: 'not found' }, 404);
+  return c.json({ ok: true });
+});
+
+// ---------- 媒体章节解析(漫画→图片列表 / 音频→音频地址) ----------
+const mediaCache = new Map<string, { at: number; kind: string; items: string[] }>();
+const MEDIA_TTL = 30 * 60 * 1000;
+
+onlineRoutes.get('/media', async (c) => {
+  const source = dec(c.req.query('source') ?? '');
+  const url = dec(c.req.query('url') ?? '');
+  const title = dec(c.req.query('title') ?? '');
+  const name = dec(c.req.query('name') ?? '');
+  const author = dec(c.req.query('author') ?? '');
+  if (!source || !url) return c.json({ error: '缺少 source / url' }, 400);
+  const ck = `${source}|${url}`;
+  const hit = mediaCache.get(ck);
+  if (hit && Date.now() - hit.at < MEDIA_TTL) {
+    return c.json({ kind: hit.kind, items: hit.items, cached: true });
+  }
+  try {
+    const m = await withTimeout(getChapterMedia(source, url, title, name, author), SEARCH_TIMEOUT_MS);
+    mediaCache.set(ck, { at: Date.now(), kind: m.kind, items: m.items });
+    return c.json(m);
+  } catch (e: any) {
+    return c.json({ error: String(e?.message || e).slice(0, 300) }, 502);
+  }
+});
+
+// ---------- 图片代理(防盗链:带源 Referer/Cookie/UA) ----------
+onlineRoutes.get('/img', async (c) => {
+  const u = dec(c.req.query('u') ?? '');
+  const source = dec(c.req.query('source') ?? '');
+  const ref = dec(c.req.query('ref') ?? '');
+  if (!u) return c.json({ error: '缺少 u' }, 400);
+  const raw = getSourceRaw(source);
+  if (!raw) return c.json({ error: '书源不存在' }, 404);
+  try {
+    const r = await sourceFetchBinary(source, u, { timeout: 20_000 }, raw.header as any, ref || undefined);
+    if (r.status >= 400) return c.json({ error: `HTTP ${r.status}` }, 502);
+    return new Response(r.buf, {
+      headers: {
+        'Content-Type': r.contentType,
+        'Cache-Control': 'public, max-age=86400',
+      },
+    });
+  } catch (e: any) {
+    return c.json({ error: String(e?.message || e).slice(0, 200) }, 502);
+  }
+});
+
+// ---------- 音频代理(Range 流式透传) ----------
+onlineRoutes.get('/audio', async (c) => {
+  const u = dec(c.req.query('u') ?? '');
+  const source = dec(c.req.query('source') ?? '');
+  const ref = dec(c.req.query('ref') ?? '');
+  if (!u) return c.json({ error: '缺少 u' }, 400);
+  const raw = getSourceRaw(source);
+  if (!raw) return c.json({ error: '书源不存在' }, 404);
+  try {
+    const range = c.req.header('range') ?? null;
+    const res = await sourceFetchStream(source, u, {}, raw.header as any, ref || undefined, range);
+    const headers = new Headers();
+    for (const h of ['content-type', 'content-length', 'content-range', 'accept-ranges']) {
+      const v = res.headers.get(h);
+      if (v) headers.set(h, v);
+    }
+    if (!headers.has('accept-ranges')) headers.set('accept-ranges', 'bytes');
+    headers.set('Cache-Control', 'no-store');
+    return new Response(res.body, { status: res.status, headers });
+  } catch (e: any) {
+    return c.json({ error: String(e?.message || e).slice(0, 200) }, 502);
+  }
+});
+
+// ---------- 在线阅读进度 ----------
+onlineRoutes.get('/progress/:id', (c) => {
+  return c.json({ progress: getOnlineProgress(Number(c.req.param('id'))) });
+});
+
+onlineRoutes.put('/progress/:id', async (c) => {
+  const id = Number(c.req.param('id'));
+  const body = await c.req.json().catch(() => null);
+  if (!body || typeof body.chapter_index !== 'number') return c.json({ error: 'invalid body' }, 400);
+  saveOnlineProgress(id, Math.max(0, Number(body.chapter_index) || 0), Math.max(0, Number(body.position) || 0));
   return c.json({ ok: true });
 });

@@ -267,11 +267,10 @@ export function buildUrlParts(
     url = reencodeKeyPercent(url, String(urlVars.key), cs);
   }
 
-  // 相对地址 → 绝对
+  // 相对地址 → 绝对(标准 URL 解析;/x 相对源键根路径)
   if (!/^https?:\/\//i.test(url)) {
     if (url.startsWith('//')) url = 'https:' + url;
-    else if (url.startsWith('/')) url = env.sourceKey.replace(/\/$/, '') + url;
-    else url = resolveRelative(env.baseUrl, url);
+    else url = resolveRelative(env.sourceKey, url);
   }
   return { url, options };
 }

@@ -40,8 +40,6 @@ interface Ctx {
 function loadCtx(sourceUrl: string): Ctx {
   const raw = getSourceRaw(sourceUrl);
   if (!raw) throw new SourceEngineError('书源不存在');
-  if ((raw as any).bookSourceType === 1) throw new SourceEngineError('音频书源暂不支持');
-  if ((raw as any).bookSourceType === 2) throw new SourceEngineError('图片/漫画书源暂不支持(当前阅读器仅支持文字)');
   return {
     raw,
     key: raw.bookSourceUrl,
@@ -112,7 +110,7 @@ export async function searchSource(
   sourceUrl: string,
   key: string,
   page = 1,
-): Promise<{ books: OnlineSearchBook[]; messages: string[]; costMs: number }> {
+): Promise<{ books: OnlineSearchBook[]; messages: string[]; costMs: number; sourceType: number }> {
   const t0 = Date.now();
   const ctx = loadCtx(sourceUrl);
   if (!ctx.raw.searchUrl) throw new SourceEngineError('书源未配置搜索地址');
@@ -152,7 +150,7 @@ export async function searchSource(
   if (!books.length && !ctx.messages.length) {
     throw new SourceEngineError('未搜索到结果(书源规则或站点可能已失效)');
   }
-  return { books, messages: ctx.messages, costMs: Date.now() - t0 };
+  return { books, messages: ctx.messages, costMs: Date.now() - t0, sourceType: Number((ctx.raw as any).bookSourceType ?? 0) || 0 };
 }
 
 // ---------- 详情 ----------
@@ -340,6 +338,70 @@ export async function getChapterContent(
     throw new SourceEngineError('未解析到正文(章节可能需要登录/VIP,或规则失效)');
   }
   return { content: content.trim(), messages: ctx.messages };
+}
+
+// ---------- 媒体章节(音频/漫画):解析出资源 URL 列表 ----------
+export interface ChapterMedia {
+  kind: 'image' | 'audio' | 'text';
+  items: string[];
+}
+
+export async function getChapterMedia(
+  sourceUrl: string,
+  chapterUrl: string,
+  chapterTitle: string,
+  bookName = '',
+  author = '',
+): Promise<ChapterMedia> {
+  const ctx = loadCtx(sourceUrl);
+  const sourceType = Number((ctx.raw as any).bookSourceType ?? 0) || 0;
+  const rule = ctx.raw.ruleContent ?? {};
+  if (!rule.content) throw new SourceEngineError('书源未配置正文规则');
+
+  ctx.book.name = bookName;
+  ctx.book.author = author;
+  ctx.book.durChapterTitle = chapterTitle;
+
+  const kind: ChapterMedia['kind'] = sourceType === 2 ? 'image' : sourceType === 1 ? 'audio' : 'text';
+  const items: string[] = [];
+  let lastPageUrl = chapterUrl;
+  const visited = new Set<string>();
+  let url = chapterUrl;
+  let pages = 0;
+
+  while (url && pages < MAX_CONTENT_PAGES) {
+    if (visited.has(url)) break;
+    visited.add(url);
+    const { url: u, options } = splitFetchOptions(url);
+    const res = await fetchPage(ctx, u, options);
+    lastPageUrl = res.finalUrl;
+    const env = makeEnv(ctx, res.body, res.finalUrl);
+    const vals = evalRule(env, rule.content);
+    for (const v of vals) {
+      for (const line of v.split('\n')) {
+        const t = line.trim();
+        if (t) items.push(t);
+      }
+    }
+    if (!rule.nextContentUrl) break;
+    const nextVals = evalRule(env, rule.nextContentUrl);
+    const next = nextVals.map((s) => absoluteUrl(res.finalUrl, s.split('\n')[0])).find(Boolean) ?? '';
+    if (!next || visited.has(next)) break;
+    url = next;
+    pages++;
+  }
+
+  if (!items.length && !ctx.messages.length) {
+    throw new SourceEngineError('未解析到媒体内容(章节可能需要登录/VIP,或规则失效)');
+  }
+  // 音频取首个资源;图片保留全部(去重保序);相对地址按章节页解析
+  let finalItems = kind === 'audio' ? items.slice(0, 1) : items.filter((x, i) => items.indexOf(x) === i);
+  finalItems = finalItems.map((x) => {
+    const { url: clean } = splitFetchOptions(x);
+    if (/^https?:\/\//i.test(clean)) return x;
+    return absoluteUrl(lastPageUrl, clean);
+  });
+  return { kind, items: finalItems };
 }
 
 function splitFetchOptions(url: string): { url: string; options: Record<string, any> } {

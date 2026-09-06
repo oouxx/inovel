@@ -148,6 +148,69 @@ export function encodeBody(body: string, charset?: string): Uint8Array {
   return new TextEncoder().encode(body);
 }
 
+/** 二进制抓取(图片代理用):带源 header/Cookie/Referer,返回原始字节 */
+export async function sourceFetchBinary(
+  sourceKey: string,
+  rawUrl: string,
+  extra: FetchOptions = {},
+  sourceHeader?: string | Record<string, string>,
+  referer?: string,
+): Promise<{ buf: ArrayBuffer; contentType: string; status: number }> {
+  const { url, options } = splitUrlOptions(rawUrl);
+  const opts: FetchOptions = { ...options, ...extra };
+  const headers: Record<string, string> = {
+    'User-Agent': DEFAULT_UA,
+    ...parseHeaderField(sourceHeader),
+    ...(opts.headers || {}),
+  };
+  if (referer) {
+    headers['Referer'] = referer;
+    headers['Referrer-Policy'] = 'no-referrer-when-downgrade';
+  }
+  const ck = cookieHeader(url);
+  if (ck) headers['Cookie'] = ck;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), opts.timeout ?? DEFAULT_TIMEOUT);
+  let res: Response;
+  try {
+    res = await fetch(url, { method: (opts.method || 'GET').toUpperCase(), headers, signal: controller.signal, redirect: 'follow' });
+  } catch (e: any) {
+    clearTimeout(timer);
+    throw new SourceFetchError(`资源请求失败: ${String(e?.message || e)}`, false);
+  }
+  clearTimeout(timer);
+  const buf = await res.arrayBuffer();
+  mergeSetCookies(url, res);
+  return { buf, contentType: res.headers.get('content-type') || 'application/octet-stream', status: res.status };
+}
+
+/** 流式抓取(音频代理):透传 Range,返回原始 Response 供流式转发 */
+export async function sourceFetchStream(
+  sourceKey: string,
+  rawUrl: string,
+  extra: FetchOptions = {},
+  sourceHeader?: string | Record<string, string>,
+  referer?: string,
+  range?: string | null,
+): Promise<Response> {
+  const { url, options } = splitUrlOptions(rawUrl);
+  const opts: FetchOptions = { ...options, ...extra };
+  const headers: Record<string, string> = {
+    'User-Agent': DEFAULT_UA,
+    ...parseHeaderField(sourceHeader),
+    ...(opts.headers || {}),
+  };
+  if (referer) headers['Referer'] = referer;
+  if (range) headers['Range'] = range;
+  const ck = cookieHeader(url);
+  if (ck) headers['Cookie'] = ck;
+  return await fetch(url, {
+    method: (opts.method || 'GET').toUpperCase(),
+    headers,
+    redirect: 'follow',
+  });
+}
+
 // ---------- 主入口 ----------
 export function parseHeaderField(h?: string | Record<string, string>): Record<string, string> {
   if (!h) return {};

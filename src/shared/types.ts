@@ -99,6 +99,8 @@ export interface OnlineSearchBook {
 export interface OnlineSearchResult {
   sourceUrl: string;
   sourceName: string;
+  /** 0 文字 1 音频 2 图片(漫画) */
+  sourceType: number;
   error: string | null;
   /** 本次搜索耗时 ms */
   costMs: number;
@@ -150,6 +152,35 @@ export interface OnlineSourceTestResult {
   costMs: number;
   sample: string;
   error: string | null;
+}
+
+// ---------- 在线书架(音频/漫画等流式阅读) ----------
+
+export interface OnlineLibraryBook {
+  id: number;
+  sourceUrl: string;
+  bookUrl: string;
+  name: string;
+  author: string;
+  coverUrl: string;
+  /** 0 文字 1 音频 2 图片(漫画) */
+  sourceType: number;
+  chapterCount: number;
+  /** position:漫画=章节内滚动比例 0~1;音频=已播放秒数 */
+  progress: { chapter_index: number; position: number } | null;
+  createdAt: number;
+}
+
+export interface OnlineChapterMedia {
+  kind: 'image' | 'audio' | 'text';
+  items: string[];
+}
+
+export interface OnlineProgress {
+  online_book_id: number;
+  chapter_index: number;
+  position: number;
+  updated_at: number;
 }
 
 // ---------- AI ----------

@@ -130,6 +130,27 @@ function migrate(db: Database) {
       cookies    TEXT NOT NULL DEFAULT '{}',
       updated_at INTEGER
     );
+
+    CREATE TABLE IF NOT EXISTS online_books (
+      id             INTEGER PRIMARY KEY AUTOINCREMENT,
+      source_url     TEXT NOT NULL,
+      book_url       TEXT NOT NULL,
+      name           TEXT NOT NULL,
+      author         TEXT DEFAULT '',
+      cover_url      TEXT DEFAULT '',
+      source_type    INTEGER DEFAULT 0,
+      toc            TEXT,
+      toc_updated_at INTEGER,
+      created_at     INTEGER,
+      UNIQUE(source_url, book_url)
+    );
+
+    CREATE TABLE IF NOT EXISTS online_progress (
+      online_book_id INTEGER PRIMARY KEY,
+      chapter_index  INTEGER DEFAULT 0,
+      position       REAL DEFAULT 0,
+      updated_at     INTEGER
+    );
   `);
 }
 
