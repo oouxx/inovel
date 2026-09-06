@@ -144,7 +144,7 @@ async function importYiove() {
             <Globe class="w-4 h-4 text-dim shrink-0 mt-1" />
             <div class="min-w-0 flex-1">
               <div class="font-medium flex items-center gap-2">
-                <span class="truncate">{{ s.bookSourceName }}</span>
+                <span class="truncate min-w-0">{{ s.bookSourceName }}</span>
                 <span v-if="s.bookSourceGroup" class="text-xs text-dim shrink-0">{{ s.bookSourceGroup }}</span>
               </div>
               <div class="text-xs text-dim truncate mt-0.5">{{ s.bookSourceUrl }}</div>
@@ -183,7 +183,7 @@ async function importYiove() {
                     :style="{ left: s.enabled ? '14px' : '2px' }"
                   ></span>
                 </span>
-                <span :class="s.enabled ? 'accent' : 'text-dim'">{{ s.enabled ? '启用中' : '已禁用' }}</span>
+                <span class="hidden sm:inline text-xs" :class="s.enabled ? 'accent' : 'text-dim'">{{ s.enabled ? '启用中' : '已禁用' }}</span>
               </button>
               <button class="btn !px-2.5 text-red-500" title="删除" @click="remove(s)">
                 <Trash2 class="w-4 h-4" />

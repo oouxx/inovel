@@ -463,7 +463,7 @@ const modalType = computed(() => modalBook.value?.sourceType ?? 0);
               </div>
               <div class="min-w-0 flex-1">
                 <div class="flex items-center gap-2">
-                  <span class="font-medium truncate">{{ b.name || '(无标题)' }}</span>
+                  <span class="font-medium truncate min-w-0">{{ b.name || '(无标题)' }}</span>
                   <span v-if="b.origins.length > 1" class="text-xs accent shrink-0">{{ b.origins.length }} 源</span>
                 </div>
                 <div class="text-xs text-dim mt-1 truncate">
@@ -491,11 +491,11 @@ const modalType = computed(() => modalBook.value?.sourceType ?? 0);
       <template v-else-if="results.length">
         <section v-for="r in results" :key="r.sourceUrl" class="mb-8">
           <div class="flex items-center gap-2 mb-2">
-            <span class="text-sm font-medium">{{ r.sourceName }}</span>
-            <span v-if="r.sourceType === 1" class="text-xs text-dim">音频源</span>
-            <span v-else-if="r.sourceType === 2" class="text-xs text-dim">漫画源</span>
-            <span v-if="!r.error" class="text-xs text-dim">{{ r.books.length }} 条 · {{ r.costMs }}ms</span>
-            <span v-else class="text-xs text-red-500 truncate">{{ r.error }}</span>
+            <span class="text-sm font-medium truncate min-w-0">{{ r.sourceName }}</span>
+            <span v-if="r.sourceType === 1" class="text-xs text-dim shrink-0">音频源</span>
+            <span v-else-if="r.sourceType === 2" class="text-xs text-dim shrink-0">漫画源</span>
+            <span v-if="!r.error" class="text-xs text-dim shrink-0">{{ r.books.length }} 条 · {{ r.costMs }}ms</span>
+            <span v-else class="text-xs text-red-500 truncate min-w-0">{{ r.error }}</span>
           </div>
           <ul v-if="r.books.length" class="divide-y" style="border-color: var(--border)">
             <li v-for="(b, i) in r.books" :key="i">
@@ -608,7 +608,7 @@ const modalType = computed(() => modalBook.value?.sourceType ?? 0);
             <h3 class="text-sm font-medium mb-2">目录</h3>
             <ul class="max-h-64 overflow-y-auto text-sm divide-y" style="border-color: var(--border)">
               <li v-for="(c, i) in modalToc" :key="i" class="py-2 flex items-center gap-2">
-                <span class="truncate" :class="c.url ? '' : 'text-dim'">{{ c.title }}</span>
+                <span class="truncate min-w-0" :class="c.url ? '' : 'text-dim'">{{ c.title }}</span>
                 <span v-if="c.isVip" class="text-xs text-amber-500 shrink-0">VIP</span>
               </li>
             </ul>

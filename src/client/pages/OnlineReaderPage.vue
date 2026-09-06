@@ -292,15 +292,15 @@ const audioSrc = computed(() => {
           <span>{{ fmt(audioDuration) }}</span>
         </div>
 
-        <div class="mt-6 flex items-center justify-center gap-6">
-          <button class="btn !px-3" :disabled="current === 0" @click="go(-1)"><ChevronLeft class="w-4 h-4" /></button>
-          <button class="btn !px-3 text-xs" @click="seekBy(-15)">-15s</button>
-          <button class="btn btn-primary !px-6 !py-3" @click="togglePlay">
+        <div class="mt-6 flex items-center justify-center gap-3 sm:gap-6">
+          <button class="btn !px-2 sm:!px-3" :disabled="current === 0" @click="go(-1)"><ChevronLeft class="w-4 h-4" /></button>
+          <button class="btn !px-2 sm:!px-3 text-xs" @click="seekBy(-15)">-15s</button>
+          <button class="btn btn-primary !px-4 sm:!px-6 !py-3" @click="togglePlay">
             <Pause v-if="playing" class="w-5 h-5" />
             <Play class="w-5 h-5" v-else />
           </button>
-          <button class="btn !px-3 text-xs" @click="seekBy(15)">+15s</button>
-          <button class="btn !px-3" :disabled="current >= chapters.length - 1" @click="go(1)"><ChevronRight class="w-4 h-4" /></button>
+          <button class="btn !px-2 sm:!px-3 text-xs" @click="seekBy(15)">+15s</button>
+          <button class="btn !px-2 sm:!px-3" :disabled="current >= chapters.length - 1" @click="go(1)"><ChevronRight class="w-4 h-4" /></button>
         </div>
         <p class="text-xs text-dim mt-5">{{ current + 1 }} / {{ chapters.filter((c) => c.url).length }} 章 · 播放进度自动保存</p>
       </div>
