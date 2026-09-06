@@ -12,6 +12,7 @@ import { statsRoutes } from './routes/stats';
 import { fullTextSearch, type FullTextResult } from './services/searchService';
 import { bookMetaRoutes } from './routes/bookMeta';
 import { onlineRoutes } from './routes/online';
+import { importBuiltinSources } from './sources/store';
 import { existsSync, statSync } from 'node:fs';
 import path from 'node:path';
 
@@ -41,6 +42,11 @@ api.route('/bookmarks', bookmarkDeleteRoutes);
 api.route('/stats', statsRoutes);
 api.route('/books', bookMetaRoutes); // 封面 / 编辑书籍信息
 api.route('/online', onlineRoutes); // 在线书源(Legado)
+
+// 启动时导入内置书源(已存在只升级规则)
+for (const b of importBuiltinSources()) {
+  console.log(`   内置书源 ${b.file}: 新增 ${b.result.added} · 更新 ${b.result.updated}`);
+}
 
 // GET /api/books/:id/fulltext?q= —— 全书全文搜索
 api.get('/books/:id/fulltext', (c) => {

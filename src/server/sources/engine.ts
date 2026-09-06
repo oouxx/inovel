@@ -131,15 +131,16 @@ export async function searchSource(
   const seen = new Set<string>();
   for (const item of items) {
     const name = evalRuleText(env, rule.name, item);
+    const author = evalRuleText(env, rule.author, item);
     const bookUrlRaw = evalRuleText(env, rule.bookUrl, item);
     if (!name && !bookUrlRaw) continue;
     const bookUrl = absoluteUrl(res.finalUrl, (bookUrlRaw.split('\n')[0] ?? '').trim());
-    const dedupeKey = bookUrl || name;
+    const dedupeKey = name ? `n:${name}|${author}` : `u:${bookUrl}`;
     if (seen.has(dedupeKey)) continue;
     seen.add(dedupeKey);
     books.push({
       name,
-      author: evalRuleText(env, rule.author, item),
+      author,
       kind: evalRuleText(env, rule.kind, item),
       intro: evalRuleText(env, rule.intro, item),
       coverUrl: absoluteUrl(res.finalUrl, evalRuleText(env, rule.coverUrl, item)),
@@ -246,8 +247,11 @@ export async function getToc(
   sourceUrl: string,
   tocUrl: string,
   sessionVars?: Map<string, string>,
+  bookInfo?: { name?: string; author?: string },
 ): Promise<{ chapters: OnlineChapter[]; messages: string[] }> {
   const ctx = loadCtx(sourceUrl);
+  if (bookInfo?.name) ctx.book.name = bookInfo.name;
+  if (bookInfo?.author) ctx.book.author = bookInfo.author;
   const rule = ctx.raw.ruleToc ?? {};
   if (!rule.chapterList) throw new SourceEngineError('书源未配置目录规则');
 
@@ -446,10 +450,11 @@ export async function exploreBooks(
   const seen = new Set<string>();
   for (const item of items) {
     const name = evalRuleText(env, rule.name, item);
+    const author = evalRuleText(env, rule.author, item);
     const bookUrlRaw = evalRuleText(env, rule.bookUrl, item);
     if (!name && !bookUrlRaw) continue;
     const bookUrl = absoluteUrl(res.finalUrl, (bookUrlRaw.split('\n')[0] ?? '').trim());
-    const dedupeKey = bookUrl || name;
+    const dedupeKey = name ? `n:${name}|${author}` : `u:${bookUrl}`;
     if (seen.has(dedupeKey)) continue;
     seen.add(dedupeKey);
     books.push({

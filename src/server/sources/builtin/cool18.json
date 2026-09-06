@@ -1,0 +1,43 @@
+[
+  {
+    "bookSourceName": "禁忌书屋 cool18(同系列合并)",
+    "bookSourceUrl": "https://www.cool18.com/bbs4/index.php",
+    "bookSourceType": 0,
+    "bookSourceGroup": "内置,论坛,小说",
+    "enabled": true,
+    "enabledExplore": false,
+    "enabledCookieJar": true,
+    "searchUrl": "https://www.cool18.com/bbs4/index.php?action=search&act=threadsearch&app=forum&keywords={{java.encodeURI(key)}}&submit=%E6%9F%A5%E8%AF%A2&p={{page}}",
+    "header": {
+      "User-Agent": "Mozilla/5.0 (Linux; Android 12; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Mobile Safari/537.36",
+      "Accept-Language": "zh-CN,zh;q=0.9"
+    },
+    "concurrentRate": "1000",
+    "bookSourceComment": "cool18/bbs4 论坛结构:一个帖子=小说的一段(可能含多话)。本源在目录阶段用清洗后的标题回搜站内,把同系列帖子(标题相同、括号内章节范围不同)合并为一本书的多个章节,按发帖 tid 升序排列。搜索时列表仍按帖子展示,打开任意一帖即可获得整个系列。",
+    "ruleSearch": {
+      "bookList": "@css:.thread-list li",
+      "name": "@css:a@text##[（(][^（()）]*[)）]##\n##作者.*##",
+      "author": "@css:a@text@js:var m=String(result).match(/作者[：:]([^（()）]+)/);m?m[1]:''",
+      "kind": "禁忌书屋",
+      "lastUpdateTime": "@css:i@text",
+      "intro": "@css:a@text",
+      "bookUrl": "@css:a@href"
+    },
+    "ruleBookInfo": {
+      "name": "@css:.main-title@text##[（(][^（()）]*[)）]##\n##作者.*##",
+      "author": "@css:.main-title@text@js:var m=String(result).match(/作者[：:]([^（()）]+)/);m?m[1]:''",
+      "kind": "论坛帖子",
+      "intro": "@css:meta[name=description]@content",
+      "tocUrl": "@js:baseUrl"
+    },
+    "ruleToc": {
+      "chapterList": "<js>\nvar name = String(book.name || '');\nif (!name) {\n  var m = String(result || '').match(/class=\"main-title\"[^>]*>([^<]+)</);\n  name = m ? m[1] : '';\n}\nfunction cleanBase(t) {\n  t = String(t || '').replace(/[【】\\[\\]〔〕]/g, '');\n  t = t.replace(/作者\\s*[：:].*$/, '');\n  t = t.replace(/[（(][^（()）]*[)）]/g, '');\n  return t.replace(/\\s+/g, '').trim();\n}\nvar base = cleanBase(name);\nif (!base) '';\nelse {\n  var kw = base.substring(0, base.length > 5 ? 5 : base.length);\n  var seen = {};\n  var list = [];\n  for (var p = 1; p <= 3; p++) {\n    var html = java.ajax('https://www.cool18.com/bbs4/index.php?action=search&act=threadsearch&app=forum&keywords=' + java.encodeURI(kw) + '&submit=%E6%9F%A5%E8%AF%A2&p=' + p);\n    if (!html) break;\n    var doc = org.jsoup.Jsoup.parse(html);\n    var lis = doc.select('.thread-list li.l-m1');\n    var added = 0;\n    for (var i = 0; i < lis.size(); i++) {\n      var a = lis.get(i).select('a').first();\n      if (!a) continue;\n      var t = a.text();\n      var href = a.attr('href');\n      if (!href || seen[href] || seen[t.replace(/\\s+/g, '')]) continue;\n      if (cleanBase(t) !== base) continue;\n      seen[href] = 1;\n      seen[t.replace(/\\s+/g, '')] = 1;\n      var tid = href.match(/tid=(\\d+)/);\n      list.push({ tid: tid ? parseInt(tid[1], 10) : 0, h: '<a href=\"' + href + '\">' + t + '</a>' });\n      added++;\n    }\n    if (added === 0) break;\n  }\n  list.sort(function(a, b) { return a.tid - b.tid; });\n  var out = '';\n  for (var j = 0; j < list.length; j++) out += list[j].h;\n  out ? '<div>' + out + '</div>' : '';\n}\n</js>\ntag.a",
+      "chapterName": "text",
+      "chapterUrl": "href"
+    },
+    "ruleContent": {
+      "content": "@css:#content-section pre@text##\\n{3,}##\\n\\n",
+      "nextContentUrl": ""
+    }
+  }
+]

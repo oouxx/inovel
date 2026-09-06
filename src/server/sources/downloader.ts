@@ -70,7 +70,7 @@ async function runTask(task: OnlineDownloadTask) {
     const info = await getBookInfo(task.sourceUrl, task.bookUrl, sessionVars);
     task.bookName = info.info.name || '未命名';
     task.sourceName = getSourceName(task.sourceUrl);
-    const toc = await getToc(task.sourceUrl, info.info.tocUrl, sessionVars);
+    const toc = await getToc(task.sourceUrl, info.info.tocUrl, sessionVars, { name: info.info.name, author: info.info.author });
     // 跳过无 url 的卷头行
     const chapters = toc.chapters.filter((ch) => ch.url).slice(0, MAX_CHAPTERS);
     task.total = chapters.length;
