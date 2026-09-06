@@ -107,6 +107,48 @@ export interface OnlineSearchResult {
   books: OnlineSearchBook[];
 }
 
+export interface OnlineSearchOrigin {
+  sourceUrl: string;
+  sourceName: string;
+  bookUrl: string;
+  /** 0 文字 1 音频 2 图片(漫画) */
+  sourceType: number;
+  coverUrl: string;
+  latestChapter: string;
+  kind: string;
+  wordCount: string;
+}
+
+/** 跨源聚合后的一本书(对齐原版阅读:同书同作者合并,origins 记录全部命中来源) */
+export interface OnlineSearchBookMerged {
+  name: string;
+  author: string;
+  kind: string;
+  intro: string;
+  coverUrl: string;
+  latestChapter: string;
+  bookUrl: string;
+  wordCount: string;
+  /** 主展示来源(首次命中) */
+  sourceUrl: string;
+  sourceName: string;
+  origins: OnlineSearchOrigin[];
+}
+
+export interface OnlineSearchFlatResult {
+  books: OnlineSearchBookMerged[];
+  total: number;
+  page: number;
+  /** 是否可能有下一页(本轮任一源返回了结果) */
+  hasMore: boolean;
+  processedSources: number;
+  totalSources: number;
+  failedSources: number;
+  /** 聚合结果超过上限被截断 */
+  truncated: boolean;
+  costMs: number;
+}
+
 export interface OnlineBookInfo extends OnlineSearchBook {
   tocUrl: string;
 }

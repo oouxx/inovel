@@ -5,6 +5,7 @@ import type {
   ChapterMeta,
   OnlineBookInfo,
   OnlineChapterMedia,
+  OnlineSearchFlatResult,
   OnlineLibraryBook,
   OnlineChapter,
   OnlineDownloadTask,
@@ -143,7 +144,14 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ sourceUrl, keyword }),
     }),
-  onlineSearch: (q: string) => http<{ results: OnlineSearchResult[]; total: number }>(`/api/online/search?q=${encodeURIComponent(q)}`),
+  onlineSearch: (q: string, page = 1, precision = true) =>
+    http<OnlineSearchFlatResult>(
+      `/api/online/search?q=${encodeURIComponent(q)}&page=${page}${precision ? '' : '&precision=0'}`,
+    ),
+  onlineSearchGrouped: (q: string, page = 1, precision = true) =>
+    http<{ results: OnlineSearchResult[]; total: number; costMs: number }>(
+      `/api/online/search?q=${encodeURIComponent(q)}&page=${page}&mode=grouped${precision ? '' : '&precision=0'}`,
+    ),
   onlineBook: (source: string, bookUrl: string) =>
     http<{ info: OnlineBookInfo; messages: string[] }>(
       `/api/online/book?source=${encodeURIComponent(source)}&bookUrl=${encodeURIComponent(bookUrl)}`,

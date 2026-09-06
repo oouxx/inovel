@@ -2,6 +2,7 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue';
 import { useRouter } from 'vue-router';
 import { api } from '@/api';
+import { mergeFlatPage, searchMergeKey } from '@shared/search';
 import type {
   OnlineBookInfo,
   OnlineChapter,
@@ -9,6 +10,7 @@ import type {
   OnlineExploreCategory,
   OnlineLibraryBook,
   OnlineSearchBook,
+  OnlineSearchBookMerged,
   OnlineSearchResult,
   BookSource,
 } from '@shared/types';
@@ -64,18 +66,99 @@ async function refreshTasks() {
   tasks.value = await api.downloadTasks().catch(() => []);
 }
 
+// ---- 搜索(对齐原版:跨源聚合去重 + 分桶排序 + 全源翻页) ----
+const flatResults = ref<OnlineSearchBookMerged[]>([]);
+const flatTotal = ref(0);
+const flatPage = ref(1);
+const flatHasMore = ref(false);
+const flatTruncated = ref(false);
+const flatStat = ref('');
+const loadingMore = ref(false);
+const precision = ref(true);
+const viewMode = ref<'flat' | 'grouped'>('flat');
+
+function mergedToSearchBook(b: OnlineSearchBookMerged): OnlineSearchBook {
+  return {
+    name: b.name,
+    author: b.author,
+    kind: b.kind,
+    intro: b.intro,
+    coverUrl: b.coverUrl,
+    latestChapter: b.latestChapter,
+    bookUrl: b.bookUrl,
+    wordCount: b.wordCount,
+  };
+}
+
+async function searchFlat(kw: string, page = 1, append = false) {
+  const r = await api.onlineSearch(kw, page, precision.value);
+  flatPage.value = r.page;
+  flatHasMore.value = r.hasMore;
+  flatTruncated.value = r.truncated;
+  flatStat.value = `已搜 ${r.processedSources}/${r.totalSources} 源${r.failedSources ? ` · 失败 ${r.failedSources}` : ''} · ${(r.costMs / 1000).toFixed(1)}s`;
+  if (append) {
+    flatResults.value = mergeFlatPage(flatResults.value, r.books, kw);
+    flatTotal.value = flatResults.value.length;
+  } else {
+    flatResults.value = r.books;
+    flatTotal.value = flatResults.value.length;
+  }
+}
+
 async function doSearch() {
   const kw = q.value.trim();
   if (!kw) return;
   searching.value = true;
   searched.value = true;
   modalClose();
+  flatResults.value = [];
+  results.value = [];
   try {
-    const r = await api.onlineSearch(kw);
-    results.value = r.results;
+    if (viewMode.value === 'flat') await searchFlat(kw);
+    else {
+      const r = await api.onlineSearchGrouped(kw, 1, precision.value);
+      results.value = r.results;
+    }
   } finally {
     searching.value = false;
   }
+}
+
+async function loadMore() {
+  const kw = q.value.trim();
+  if (!kw || loadingMore.value || !flatHasMore.value) return;
+  loadingMore.value = true;
+  try {
+    await searchFlat(kw, flatPage.value + 1, true);
+  } catch (e: any) {
+    alert(e?.message || '加载失败');
+  } finally {
+    loadingMore.value = false;
+  }
+}
+
+/** 切换视图/精确搜索开关:重新搜索第 1 页 */
+async function refetch() {
+  const kw = q.value.trim();
+  if (!kw || searching.value) return;
+  searching.value = true;
+  flatResults.value = [];
+  results.value = [];
+  try {
+    if (viewMode.value === 'flat') await searchFlat(kw);
+    else {
+      const r = await api.onlineSearchGrouped(kw, 1, precision.value);
+      results.value = r.results;
+    }
+  } finally {
+    searching.value = false;
+  }
+}
+
+function switchView(m: 'flat' | 'grouped') {
+  if (viewMode.value === m) return;
+  viewMode.value = m;
+  refetch();
 }
 
 function openModal(source: string, b: OnlineSearchBook, sourceType = 0) {
@@ -354,20 +437,23 @@ const modalType = computed(() => modalBook.value?.sourceType ?? 0);
     <div v-if="searching" class="text-center text-dim text-sm py-10">
       正在搜索 {{ enabledSourceCount }} 个书源…
     </div>
-    <template v-else-if="results.length">
-      <section v-for="r in results" :key="r.sourceUrl" class="mb-8">
-        <div class="flex items-center gap-2 mb-2">
-          <span class="text-sm font-medium">{{ r.sourceName }}</span>
-          <span v-if="r.sourceType === 1" class="text-xs text-dim">音频源</span>
-          <span v-else-if="r.sourceType === 2" class="text-xs text-dim">漫画源</span>
-          <span v-if="!r.error" class="text-xs text-dim">{{ r.books.length }} 条 · {{ r.costMs }}ms</span>
-          <span v-else class="text-xs text-red-500 truncate">{{ r.error }}</span>
-        </div>
-        <ul v-if="r.books.length" class="divide-y" style="border-color: var(--border)">
-          <li v-for="(b, i) in r.books" :key="i">
+    <template v-else-if="searched">
+      <div class="flex items-center gap-2 mb-3">
+        <button class="btn !px-3 !py-1.5 text-xs" :class="viewMode === 'flat' ? 'btn-primary' : 'text-dim'" @click="switchView('flat')">聚合</button>
+        <button class="btn !px-3 !py-1.5 text-xs" :class="viewMode === 'grouped' ? 'btn-primary' : 'text-dim'" @click="switchView('grouped')">按源</button>
+        <label class="flex items-center gap-1.5 text-xs text-dim cursor-pointer select-none ml-1">
+          <input type="checkbox" v-model="precision" @change="refetch" /> 精确搜索
+        </label>
+      </div>
+
+      <!-- 聚合视图(对齐原版):跨源去重 + 相关度排序 -->
+      <section v-if="viewMode === 'flat'">
+        <div class="text-xs text-dim mb-2">{{ flatTotal }} 本 · {{ flatStat }}</div>
+        <ul v-if="flatResults.length" class="divide-y" style="border-color: var(--border)">
+          <li v-for="b in flatResults" :key="searchMergeKey(b.name, b.author)">
             <button
               class="w-full flex items-center gap-3 py-3 text-left hover:opacity-80"
-              @click="openModal(r.sourceUrl, b, r.sourceType)"
+              @click="openModal(b.sourceUrl, mergedToSearchBook(b), b.origins[0]?.sourceType ?? 0)"
             >
               <div
                 class="w-10 h-14 rounded-md flex items-center justify-center text-white text-lg font-semibold shrink-0"
@@ -376,19 +462,68 @@ const modalType = computed(() => modalBook.value?.sourceType ?? 0);
                 {{ (b.name || '?').slice(0, 1) }}
               </div>
               <div class="min-w-0 flex-1">
-                <div class="font-medium truncate">{{ b.name || '(无标题)' }}</div>
+                <div class="flex items-center gap-2">
+                  <span class="font-medium truncate">{{ b.name || '(无标题)' }}</span>
+                  <span v-if="b.origins.length > 1" class="text-xs accent shrink-0">{{ b.origins.length }} 源</span>
+                </div>
                 <div class="text-xs text-dim mt-1 truncate">
                   {{ b.author }}<span v-if="b.kind"> · {{ b.kind }}</span>
                   <span v-if="b.latestChapter"> · {{ b.latestChapter }}</span>
                 </div>
-                <div v-if="b.intro" class="text-xs text-dim mt-1 line-clamp-2">{{ b.intro }}</div>
+                <div v-if="b.origins.length > 1" class="text-xs text-dim mt-0.5 truncate">
+                  来源: {{ b.origins.map((o) => o.sourceName).slice(0, 4).join(' / ') }}{{ b.origins.length > 4 ? ' …' : '' }}
+                </div>
+                <div v-else-if="b.intro" class="text-xs text-dim mt-1 line-clamp-2">{{ b.intro }}</div>
               </div>
             </button>
           </li>
         </ul>
+        <p v-if="flatTruncated" class="text-xs text-dim text-center py-2">结果过多,仅显示前 1000 本</p>
+        <div class="py-6 text-center">
+          <button v-if="flatHasMore" class="btn btn-primary" :disabled="loadingMore" @click="loadMore">
+            {{ loadingMore ? '加载中…' : `加载更多(第 ${flatPage + 1} 页)` }}
+          </button>
+          <span v-else-if="flatResults.length" class="text-xs text-dim">没有更多了</span>
+        </div>
       </section>
+
+      <!-- 按源分组视图 -->
+      <template v-else-if="results.length">
+        <section v-for="r in results" :key="r.sourceUrl" class="mb-8">
+          <div class="flex items-center gap-2 mb-2">
+            <span class="text-sm font-medium">{{ r.sourceName }}</span>
+            <span v-if="r.sourceType === 1" class="text-xs text-dim">音频源</span>
+            <span v-else-if="r.sourceType === 2" class="text-xs text-dim">漫画源</span>
+            <span v-if="!r.error" class="text-xs text-dim">{{ r.books.length }} 条 · {{ r.costMs }}ms</span>
+            <span v-else class="text-xs text-red-500 truncate">{{ r.error }}</span>
+          </div>
+          <ul v-if="r.books.length" class="divide-y" style="border-color: var(--border)">
+            <li v-for="(b, i) in r.books" :key="i">
+              <button
+                class="w-full flex items-center gap-3 py-3 text-left hover:opacity-80"
+                @click="openModal(r.sourceUrl, b, r.sourceType)"
+              >
+                <div
+                  class="w-10 h-14 rounded-md flex items-center justify-center text-white text-lg font-semibold shrink-0"
+                  style="background: linear-gradient(145deg, hsl(28 45% 55%), hsl(10 40% 40%))"
+                >
+                  {{ (b.name || '?').slice(0, 1) }}
+                </div>
+                <div class="min-w-0 flex-1">
+                  <div class="font-medium truncate">{{ b.name || '(无标题)' }}</div>
+                  <div class="text-xs text-dim mt-1 truncate">
+                    {{ b.author }}<span v-if="b.kind"> · {{ b.kind }}</span>
+                    <span v-if="b.latestChapter"> · {{ b.latestChapter }}</span>
+                  </div>
+                  <div v-if="b.intro" class="text-xs text-dim mt-1 line-clamp-2">{{ b.intro }}</div>
+                </div>
+              </button>
+            </li>
+          </ul>
+        </section>
+      </template>
+      <div v-else class="text-center text-dim text-sm py-10">没有搜索到结果</div>
     </template>
-    <div v-else-if="searched && !searching" class="text-center text-dim text-sm py-10">没有搜索到结果</div>
 
     <!-- 详情弹窗 -->
     <teleport to="body">

@@ -1,6 +1,7 @@
 // ---------- 在线书源 API ----------
 import { Hono } from 'hono';
 import type { OnlineSearchResult, OnlineSourceTestResult, OnlineChapter } from '../../shared/types';
+import { mergeSourceBooks, precisionMatch } from '../../shared/search';
 import {
   listSources,
   importSources,
@@ -32,8 +33,9 @@ import { sourceFetchBinary, sourceFetchStream } from '../sources/http';
 
 export const onlineRoutes = new Hono();
 
-const SEARCH_TIMEOUT_MS = 25_000;
-const SEARCH_CONCURRENCY = 4;
+// 对齐原版阅读:单源 30s 超时,搜索并发上限 9(MAX_THREAD)
+const SEARCH_TIMEOUT_MS = 30_000;
+const SEARCH_CONCURRENCY = 9;
 
 function dec(s: string): string {
   try {
@@ -128,10 +130,12 @@ onlineRoutes.post('/sources/test', async (c) => {
   }
 });
 
-// ---------- 搜索(多源并发) ----------
+// ---------- 搜索(多源并发;flat=跨源聚合去重排序(对齐原版),grouped=按源分组) ----------
 onlineRoutes.get('/search', async (c) => {
   const q = (c.req.query('q') ?? '').trim();
   const page = Number(c.req.query('page')) || 1;
+  const precision = c.req.query('precision') !== '0';
+  const grouped = c.req.query('mode') === 'grouped';
   const sourcesParam = c.req.query('sources');
   if (!q) return c.json({ error: '缺少搜索词' }, 400);
 
@@ -145,13 +149,14 @@ onlineRoutes.get('/search', async (c) => {
   }
   if (!targets.length) return c.json({ error: '没有已启用的书源,请先导入' }, 400);
 
+  const t0 = Date.now();
   const results: OnlineSearchResult[] = [];
   const queue = [...targets];
   const workers = Array.from({ length: Math.min(SEARCH_CONCURRENCY, queue.length) }, async () => {
     while (queue.length) {
       const url = queue.shift()!;
       const raw = getSourceRaw(url);
-      const t0 = Date.now();
+      const tt = Date.now();
       try {
         const r = await withTimeout(searchSource(url, q, page), SEARCH_TIMEOUT_MS, raw?.bookSourceName);
         results.push({
@@ -168,7 +173,7 @@ onlineRoutes.get('/search', async (c) => {
           sourceName: raw?.bookSourceName ?? url,
           sourceType: 0,
           error: String(e?.message || e).slice(0, 200),
-          costMs: Date.now() - t0,
+          costMs: Date.now() - tt,
           books: [],
         });
       }
@@ -176,12 +181,34 @@ onlineRoutes.get('/search', async (c) => {
   });
   await Promise.all(workers);
 
-  results.sort((a, b) => {
-    if (a.error && !b.error) return 1;
-    if (!a.error && b.error) return -1;
-    return b.books.length - a.books.length;
+  if (grouped) {
+    if (precision) for (const r of results) r.books = r.books.filter((b) => precisionMatch(b, q));
+    results.sort((a, b) => {
+      if (a.error && !b.error) return 1;
+      if (!a.error && b.error) return -1;
+      return b.books.length - a.books.length;
+    });
+    return c.json({ results, total: results.reduce((n, r) => n + r.books.length, 0), costMs: Date.now() - t0 });
+  }
+
+  // 聚合模式(默认,对齐原版):跨源合并去重 + 分桶排序
+  const ok = results.filter((r) => !r.error);
+  const { merged, truncated } = mergeSourceBooks(
+    ok.map((r) => ({ sourceUrl: r.sourceUrl, sourceName: r.sourceName, sourceType: r.sourceType, books: r.books })),
+    q,
+    precision,
+  );
+  return c.json({
+    books: merged,
+    total: merged.length,
+    page,
+    hasMore: ok.some((r) => r.books.length > 0),
+    processedSources: ok.length,
+    totalSources: targets.length,
+    failedSources: results.length - ok.length,
+    truncated,
+    costMs: Date.now() - t0,
   });
-  return c.json({ results, total: results.reduce((n, r) => n + r.books.length, 0) });
 });
 
 // ---------- 详情 ----------

@@ -146,7 +146,7 @@ export async function searchSource(
       bookUrl,
       wordCount: evalRuleText(env, rule.wordCount, item),
     });
-    if (books.length >= 30) break;
+    // 对齐原版:单源不截断,该页解析出多少本就全取
   }
   if (!books.length && !ctx.messages.length) {
     throw new SourceEngineError('未搜索到结果(书源规则或站点可能已失效)');
