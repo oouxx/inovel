@@ -50,7 +50,7 @@
   - `{{key}}/{{page}}/{{$.jsonpath}}/{{book.x}}/{{js表达式}}` 模板;URL options(method/body/charset/headers);GBK/Big5 请求与响应解码(GET 关键词按目标编码百分号)
   - `@put:{}`/`@get:{}` 跨阶段变量、Cookie 持久化、`concurrentRate` 限流、`nextTocUrl`/`nextContentUrl` 翻页
 - **已知限制**:需 WebView 人机验证/浏览器交互的源(如起点 Cookie 验证)会明确报错;音频(=1)/漫画(=2)源不支持;需登录 UI 配置的源(如番茄密钥)暂不支持
-- **网络路径**:实测不同源的网络要求不同 —— 如 cool18 仅代理可达(直连不通),得奇/就爱文学等国内站仅直连可达(拒绝境外代理 IP)。可用 `SOURCE_PROXY` 为书源指定专用代理,或用 `NO_PROXY` 排除国内站;两种需求并存时建议按源拆分部署
+- **网络路径**:实测不同源的网络要求不同 —— 如 cool18 仅代理可达(直连不通),得奇/就爱文学等国内站仅直连可达(拒绝境外代理 IP)。代理统一走容器/系统的 `http_proxy` 环境变量(由 mihomo 等代理分流),`NO_PROXY` 可排除特定域名
 
 ## 🚀 快速开始
 
@@ -97,7 +97,6 @@ docker run -d \
 | `PORT` | `8080` | 服务端口 |
 | `NOVELS_DIR` | `./data/novels`(Docker: `/data/novels`) | 小说 TXT 目录 |
 | `DATA_DIR` | `./data`(Docker: `/data/app`) | SQLite 数据目录 |
-| `SOURCE_PROXY` | - | 书源请求专用代理(如 `http://127.0.0.1:6152`);未设置时沿用系统 `http_proxy/https_proxy/NO_PROXY`。注意:Bun 启动时缓存代理配置,国内直连站与需代理站(如 cool18)混合使用时,建议 `NO_PROXY` 排除国内域名或为需代理的源单独部署 |
 | `AI_PROVIDER` | `openai` | `openai` / `anthropic` / `google` / `openrouter` |
 | `AI_MODEL` | 按 provider 默认 | 模型名 |
 | `OPENAI_API_KEY` | - | OpenAI 或兼容端点 Key |
