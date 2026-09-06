@@ -302,6 +302,29 @@ export async function getToc(
 }
 
 // ---------- 正文 ----------
+// 兜底:识别“整章实为图片”的内容(书源缺 bookSourceType 或被当成文字源入库时),
+// 返回图片 URL 列表;若混有正文文本或无法识别则返回 null
+function detectImageItems(items: string[]): string[] | null {
+  const srcs: string[] = [];
+  for (const raw of items) {
+    for (const line of raw.split('\n')) {
+      const t = line.trim();
+      if (!t) continue;
+      if (/<img/i.test(t)) {
+        if (t.replace(/<img\b[^>]*\s*\/?>?/gi, '').trim()) return null; // 图文混排 → 按正文处理
+        for (const m of t.matchAll(/<img\b[^>]*?\bsrc\s*=\s*["']?([^"'\s>]+)/gi)) {
+          if (m[1]) srcs.push(m[1].trim());
+        }
+      } else if (/^https?:\/\/\S+\.(jpe?g|png|gif|webp|bmp|avif)(\?\S*)?$/i.test(t)) {
+        srcs.push(t);
+      } else {
+        return null;
+      }
+    }
+  }
+  return srcs.length ? srcs : null;
+}
+
 export async function getChapterContent(
   sourceUrl: string,
   chapterUrl: string,
@@ -309,7 +332,7 @@ export async function getChapterContent(
   bookName = '',
   author = '',
   sessionVars?: Map<string, string>,
-): Promise<{ content: string; messages: string[] }> {
+): Promise<{ content: string; messages: string[]; images?: string[] }> {
   const ctx = loadCtx(sourceUrl);
   const rule = ctx.raw.ruleContent ?? {};
   if (!rule.content) throw new SourceEngineError('书源未配置正文规则');
@@ -319,6 +342,7 @@ export async function getChapterContent(
   ctx.book.durChapterTitle = chapterTitle;
 
   let content = '';
+  let lastFinalUrl = chapterUrl;
   const visited = new Set<string>();
   let url = chapterUrl;
   let pages = 0;
@@ -328,6 +352,7 @@ export async function getChapterContent(
     visited.add(url);
     const { url: u, options } = splitFetchOptions(url);
     const res = await fetchPage(ctx, u, options);
+    lastFinalUrl = res.finalUrl;
     const env = makeEnv(ctx, res.body, res.finalUrl, sessionVars);
     const part = evalRuleText(env, rule.content);
     if (part) content += (content ? '\n' : '') + part;
@@ -342,6 +367,16 @@ export async function getChapterContent(
 
   if (!content.trim() && !ctx.messages.length) {
     throw new SourceEngineError('未解析到正文(章节可能需要登录/VIP,或规则失效)');
+  }
+  // 兜底:正文规则抽出来的是一整章 <img> 标签(或纯图片 URL)——提取 src 并按章节页补全,
+  // 客户端据此自动切换为图片流渲染
+  const imgSrcs = detectImageItems(content.split('\n'));
+  if (imgSrcs) {
+    return {
+      content: '',
+      messages: ctx.messages,
+      images: imgSrcs.map((s) => (/^https?:\/\//i.test(s) ? s : absoluteUrl(lastFinalUrl, s))),
+    };
   }
   return { content: content.trim(), messages: ctx.messages };
 }
@@ -368,7 +403,7 @@ export async function getChapterMedia(
   ctx.book.author = author;
   ctx.book.durChapterTitle = chapterTitle;
 
-  const kind: ChapterMedia['kind'] = sourceType === 2 ? 'image' : sourceType === 1 ? 'audio' : 'text';
+  let kind: ChapterMedia['kind'] = sourceType === 2 ? 'image' : sourceType === 1 ? 'audio' : 'text';
   const items: string[] = [];
   let lastPageUrl = chapterUrl;
   const visited = new Set<string>();
@@ -399,6 +434,15 @@ export async function getChapterMedia(
 
   if (!items.length && !ctx.messages.length) {
     throw new SourceEngineError('未解析到媒体内容(章节可能需要登录/VIP,或规则失效)');
+  }
+  // 兜底:书源未标注类型但内容实为图片 → 自动按漫画处理
+  if (kind === 'text') {
+    const imgs = detectImageItems(items);
+    if (imgs) {
+      items.length = 0;
+      items.push(...imgs);
+      kind = 'image';
+    }
   }
   // 图片类:内容可能是 <img src> HTML(如包子漫画的 js 拼接),提取 src
   if (kind === 'image') {
@@ -516,7 +560,7 @@ export async function exploreBooks(
   sourceUrl: string,
   catUrl: string,
   page = 1,
-): Promise<{ books: OnlineSearchBook[]; messages: string[] }> {
+): Promise<{ books: OnlineSearchBook[]; messages: string[]; sourceType: number }> {
   const ctx = loadCtx(sourceUrl);
   const rule = ctx.raw.ruleExplore ?? {};
   if (!rule.bookList) throw new SourceEngineError('书源未配置发现规则');
@@ -550,5 +594,5 @@ export async function exploreBooks(
     });
     if (books.length >= 50) break;
   }
-  return { books, messages: ctx.messages };
+  return { books, messages: ctx.messages, sourceType: Number((ctx.raw as any).bookSourceType ?? 0) || 0 };
 }

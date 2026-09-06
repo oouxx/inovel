@@ -49,22 +49,30 @@ async function loadChapter() {
   mediaError.value = '';
   textContent.value = '';
   if (!ch?.url) return;
-  if (kind.value === 'text') {
-    mediaLoading.value = true;
-    try {
-      const r = await api.onlineContent(book.value!.sourceUrl, ch.url, ch.title);
-      textContent.value = r.content;
-    } catch (e: any) {
-      mediaError.value = e?.message || '加载失败';
-    } finally {
-      mediaLoading.value = false;
-    }
-    return;
-  }
   mediaLoading.value = true;
   try {
-    media.value = await api.onlineMedia(book.value!.sourceUrl, ch.url, ch.title, book.value!.name, book.value!.author);
-    if (kind.value === 'image') await nextTick(() => window.scrollTo(0, 0));
+    if (kind.value === 'text') {
+      const r = await api.onlineContent(book.value!.sourceUrl, ch.url, ch.title);
+      const imgs = r.images ?? [];
+      if (imgs.length) {
+        // 书源被标成文字源但正文实为图片(漫画):自动切换为图片流渲染
+        kind.value = 'image';
+        media.value = { kind: 'image', items: imgs };
+        await nextTick(() => window.scrollTo(0, 0));
+      } else {
+        textContent.value = r.content;
+      }
+    } else {
+      media.value = await api.onlineMedia(book.value!.sourceUrl, ch.url, ch.title, book.value!.name, book.value!.author);
+      if (media.value.kind === 'text' && kind.value === 'image') {
+        // 源并非漫画,本章返回的是文字:回退文字渲染
+        kind.value = 'text';
+        textContent.value = media.value.items.join('\n');
+        media.value = null;
+      } else if (kind.value === 'image') {
+        await nextTick(() => window.scrollTo(0, 0));
+      }
+    }
   } catch (e: any) {
     mediaError.value = e?.message || '加载失败';
   } finally {

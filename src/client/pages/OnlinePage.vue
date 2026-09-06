@@ -36,6 +36,8 @@ const modalLoading = ref(false);
 const modalInfo = ref<OnlineBookInfo | null>(null);
 const modalToc = ref<OnlineChapter[] | null>(null);
 const modalPreview = ref<{ title: string; content: string } | null>(null);
+const modalPreviewImages = ref<string[]>([]);
+const previewChapterUrl = ref('');
 const modalPreviewLoading = ref(false);
 const downloadStarted = ref(false);
 
@@ -44,6 +46,7 @@ const exploreSource = ref('');
 const exploreCats = ref<OnlineExploreCategory[]>([]);
 const exploreCatUrl = ref('');
 const exploreBooks = ref<OnlineSearchBook[]>([]);
+const exploreSourceType = ref(0);
 const exploreLoading = ref(false);
 
 async function refreshShelf() {
@@ -80,6 +83,7 @@ function openModal(source: string, b: OnlineSearchBook, sourceType = 0) {
   modalInfo.value = null;
   modalToc.value = null;
   modalPreview.value = null;
+  modalPreviewImages.value = [];
   downloadStarted.value = false;
   shelfAdded.value = false;
   loadDetail();
@@ -122,8 +126,11 @@ async function previewFirst() {
   const ch = modalToc.value?.find((c) => c.url);
   if (!ch) return;
   modalPreviewLoading.value = true;
+  modalPreviewImages.value = [];
+  previewChapterUrl.value = ch.url;
   try {
     const r = await api.onlineContent(mb.source, ch.url, ch.title);
+    modalPreviewImages.value = r.images ?? [];
     modalPreview.value = { title: ch.title, content: r.content };
   } catch (e: any) {
     modalPreview.value = { title: '错误', content: e?.message || '试读失败' };
@@ -195,6 +202,7 @@ async function loadExploreBooks() {
   try {
     const r = await api.onlineExploreBooks(exploreSource.value, exploreCatUrl.value);
     exploreBooks.value = r.books;
+    exploreSourceType.value = r.sourceType ?? 0;
   } catch (e: any) {
     exploreBooks.value = [];
   } finally {
@@ -441,7 +449,20 @@ const modalType = computed(() => modalBook.value?.sourceType ?? 0);
           <!-- 试读 -->
           <div v-if="modalPreview" class="mb-4">
             <h3 class="text-sm font-medium mb-2">{{ modalPreview.title }}</h3>
+            <template v-if="modalPreviewImages.length">
+              <div class="panel rounded-xl p-2 max-h-72 overflow-y-auto">
+                <img
+                  v-for="(u, i) in modalPreviewImages.slice(0, 5)"
+                  :key="i"
+                  :src="api.onlineImgUrl(u, modalBook!.source, previewChapterUrl)"
+                  class="w-full block mb-1"
+                  loading="lazy"
+                />
+                <p v-if="modalPreviewImages.length > 5" class="text-xs text-dim text-center py-1">共 {{ modalPreviewImages.length }} 张图,加入书架后可完整阅读</p>
+              </div>
+            </template>
             <pre
+              v-else
               class="panel rounded-xl p-3 text-xs leading-relaxed whitespace-pre-wrap max-h-64 overflow-y-auto"
               style="font-family: inherit"
             >{{ modalPreview.content }}</pre>

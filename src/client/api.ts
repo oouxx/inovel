@@ -153,7 +153,7 @@ export const api = {
       `/api/online/toc?source=${encodeURIComponent(source)}&bookUrl=${encodeURIComponent(bookUrl)}`,
     ),
   onlineContent: (source: string, url: string, title: string) =>
-    http<{ content: string; messages: string[] }>(
+    http<{ content: string; messages: string[]; images?: string[] }>(
       `/api/online/content?source=${encodeURIComponent(source)}&url=${encodeURIComponent(url)}&title=${encodeURIComponent(title)}`,
     ),
   onlineExplore: (source: string) =>
@@ -161,7 +161,7 @@ export const api = {
       `/api/online/explore?source=${encodeURIComponent(source)}`,
     ),
   onlineExploreBooks: (source: string, url: string) =>
-    http<{ books: OnlineSearchBook[]; messages: string[] }>(
+    http<{ books: OnlineSearchBook[]; messages: string[]; sourceType: number }>(
       `/api/online/explore/books?source=${encodeURIComponent(source)}&url=${encodeURIComponent(url)}`,
     ),
   createDownload: (source: string, bookUrl: string) =>
