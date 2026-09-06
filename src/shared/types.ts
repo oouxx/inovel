@@ -70,6 +70,88 @@ export interface SearchResultItem {
   encoding: string;
 }
 
+// ---------- 在线书源(Legado) ----------
+
+/** Legado 书源(仅保留运行所需字段的完整 JSON 保留在 raw 中) */
+export interface BookSource {
+  bookSourceUrl: string;
+  bookSourceName: string;
+  bookSourceGroup: string | null;
+  enabled: boolean;
+  enabledExplore: boolean;
+  customOrder: number;
+  lastImportAt: number | null;
+  /** 最近一次搜索测试的耗时(ms) */
+  respondTime: number | null;
+}
+
+export interface OnlineSearchBook {
+  name: string;
+  author: string;
+  kind: string;
+  intro: string;
+  coverUrl: string;
+  latestChapter: string;
+  bookUrl: string;
+  wordCount: string;
+}
+
+export interface OnlineSearchResult {
+  sourceUrl: string;
+  sourceName: string;
+  error: string | null;
+  /** 本次搜索耗时 ms */
+  costMs: number;
+  books: OnlineSearchBook[];
+}
+
+export interface OnlineBookInfo extends OnlineSearchBook {
+  tocUrl: string;
+}
+
+export interface OnlineChapter {
+  title: string;
+  url: string;
+  updateTime?: string;
+  isVip?: boolean;
+}
+
+export interface OnlineExploreCategory {
+  title: string;
+  url: string;
+}
+
+export interface OnlineDownloadTask {
+  id: string;
+  sourceUrl: string;
+  sourceName: string;
+  bookName: string;
+  author: string;
+  bookUrl: string;
+  /** pending | running | done | error | canceled */
+  status: string;
+  total: number;
+  finished: number;
+  currentTitle: string;
+  filePath: string | null;
+  /** 下载完成后入库的 book id */
+  bookId: number | null;
+  error: string | null;
+  createdAt: number;
+  finishedAt: number | null;
+  canceled: boolean;
+}
+
+export interface OnlineSourceTestResult {
+  sourceUrl: string;
+  sourceName: string;
+  ok: boolean;
+  count: number;
+  costMs: number;
+  sample: string;
+  error: string | null;
+}
+
 // ---------- AI ----------
 
 export type AIMode = 'chat' | 'summarize' | 'explain' | 'characters' | 'setting' | 'recap';

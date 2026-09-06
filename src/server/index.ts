@@ -11,6 +11,7 @@ import { bookmarkRoutes, bookmarkDeleteRoutes } from './routes/bookmarks';
 import { statsRoutes } from './routes/stats';
 import { fullTextSearch, type FullTextResult } from './services/searchService';
 import { bookMetaRoutes } from './routes/bookMeta';
+import { onlineRoutes } from './routes/online';
 import { existsSync, statSync } from 'node:fs';
 import path from 'node:path';
 
@@ -39,6 +40,7 @@ api.route('/books', bookmarkRoutes); // /api/books/:id/bookmarks
 api.route('/bookmarks', bookmarkDeleteRoutes);
 api.route('/stats', statsRoutes);
 api.route('/books', bookMetaRoutes); // 封面 / 编辑书籍信息
+api.route('/online', onlineRoutes); // 在线书源(Legado)
 
 // GET /api/books/:id/fulltext?q= —— 全书全文搜索
 api.get('/books/:id/fulltext', (c) => {

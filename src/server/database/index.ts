@@ -26,6 +26,12 @@ export function initDb(dataDir: string): Database {
   } catch {
     // 列已存在
   }
+  try {
+    _db.exec("ALTER TABLE book_sources ADD COLUMN variable TEXT DEFAULT ''");
+  } catch {}
+  try {
+    _db.exec("ALTER TABLE book_sources ADD COLUMN login_info TEXT DEFAULT '{}'");
+  } catch {}
   return _db;
 }
 
@@ -105,6 +111,24 @@ function migrate(db: Database) {
       author,
       category,
       tokenize = 'unicode61'
+    );
+
+    CREATE TABLE IF NOT EXISTS book_sources (
+      book_source_url TEXT PRIMARY KEY,
+      name            TEXT NOT NULL,
+      group_name      TEXT,
+      enabled         INTEGER DEFAULT 1,
+      enabled_explore INTEGER DEFAULT 0,
+      custom_order    INTEGER DEFAULT 0,
+      raw             TEXT NOT NULL,
+      last_import_at  INTEGER,
+      respond_time    INTEGER
+    );
+
+    CREATE TABLE IF NOT EXISTS source_cookies (
+      source_url TEXT PRIMARY KEY,
+      cookies    TEXT NOT NULL DEFAULT '{}',
+      updated_at INTEGER
     );
   `);
 }

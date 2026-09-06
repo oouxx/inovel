@@ -1,5 +1,20 @@
 // 统一 API 封装
-import type { Book, ChapterMeta, ReadingProgress, ScanResult, ScanStatus, SearchResultItem } from '@shared/types';
+import type {
+  Book,
+  BookSource,
+  ChapterMeta,
+  OnlineBookInfo,
+  OnlineChapter,
+  OnlineDownloadTask,
+  OnlineExploreCategory,
+  OnlineSearchBook,
+  OnlineSearchResult,
+  OnlineSourceTestResult,
+  ReadingProgress,
+  ScanResult,
+  ScanStatus,
+  SearchResultItem,
+} from '@shared/types';
 
 async function http<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, {
@@ -108,6 +123,52 @@ export const api = {
   ) => http<{ ok: boolean; book: Book }>(`/api/books/${bookId}`, { method: 'PATCH', body: JSON.stringify(data) }),
   deleteBook: (bookId: number) =>
     http<{ ok: boolean; fileRemoved: boolean; title: string }>(`/api/books/${bookId}`, { method: 'DELETE' }),
+  // ---- 在线书源(Legado) ----
+  onlineSources: () => http<{ sources: BookSource[] }>(`/api/online/sources`).then((r) => r.sources),
+  importSource: (data: { url?: string; text?: string }) =>
+    http<{ ok: boolean; added: number; updated: number; total: number }>(`/api/online/sources/import`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  deleteSource: (url: string) => http<{ ok: boolean }>(`/api/online/sources/${encodeURIComponent(url)}`, { method: 'DELETE' }),
+  toggleSource: (url: string, enabled: boolean) =>
+    http<{ ok: boolean }>(`/api/online/sources/${encodeURIComponent(url)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ enabled }),
+    }),
+  testSource: (sourceUrl: string, keyword: string) =>
+    http<OnlineSourceTestResult>(`/api/online/sources/test`, {
+      method: 'POST',
+      body: JSON.stringify({ sourceUrl, keyword }),
+    }),
+  onlineSearch: (q: string) => http<{ results: OnlineSearchResult[]; total: number }>(`/api/online/search?q=${encodeURIComponent(q)}`),
+  onlineBook: (source: string, bookUrl: string) =>
+    http<{ info: OnlineBookInfo; messages: string[] }>(
+      `/api/online/book?source=${encodeURIComponent(source)}&bookUrl=${encodeURIComponent(bookUrl)}`,
+    ),
+  onlineToc: (source: string, bookUrl: string) =>
+    http<{ chapters: OnlineChapter[]; cached?: boolean; messages?: string[] }>(
+      `/api/online/toc?source=${encodeURIComponent(source)}&bookUrl=${encodeURIComponent(bookUrl)}`,
+    ),
+  onlineContent: (source: string, url: string, title: string) =>
+    http<{ content: string; messages: string[] }>(
+      `/api/online/content?source=${encodeURIComponent(source)}&url=${encodeURIComponent(url)}&title=${encodeURIComponent(title)}`,
+    ),
+  onlineExplore: (source: string) =>
+    http<{ categories: OnlineExploreCategory[]; messages?: string[]; disabled?: boolean }>(
+      `/api/online/explore?source=${encodeURIComponent(source)}`,
+    ),
+  onlineExploreBooks: (source: string, url: string) =>
+    http<{ books: OnlineSearchBook[]; messages: string[] }>(
+      `/api/online/explore/books?source=${encodeURIComponent(source)}&url=${encodeURIComponent(url)}`,
+    ),
+  createDownload: (source: string, bookUrl: string) =>
+    http<{ ok: boolean; task: OnlineDownloadTask }>(`/api/online/download`, {
+      method: 'POST',
+      body: JSON.stringify({ source, bookUrl }),
+    }),
+  downloadTasks: () => http<{ tasks: OnlineDownloadTask[] }>(`/api/online/tasks`).then((r) => r.tasks),
+  cancelDownload: (id: string) => http<{ ok: boolean }>(`/api/online/tasks/${id}/cancel`, { method: 'POST' }),
 };
 
 export interface Bookmark {

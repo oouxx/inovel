@@ -79,6 +79,7 @@ watch(books, regroup, { immediate: true });
       </div>
       <nav class="flex items-center gap-2">
         <RouterLink to="/books" class="btn"><LayoutGrid class="w-4 h-4" /> 全部</RouterLink>
+        <RouterLink to="/online" class="btn"><Compass class="w-4 h-4" /> 在线</RouterLink>
         <RouterLink to="/search" class="btn"><Search class="w-4 h-4" /> 搜索</RouterLink>
         <RouterLink to="/settings" class="btn"><Settings2 class="w-4 h-4" /> 管理</RouterLink>
       </nav>
