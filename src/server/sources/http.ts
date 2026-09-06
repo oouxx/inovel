@@ -16,6 +16,17 @@ const DEFAULT_UA =
   'Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.6367.82 Mobile Safari/537.36';
 export const DEFAULT_TIMEOUT = 20_000;
 
+/**
+ * 书源专用代理(SOURCE_PROXY):
+ * - 未设置:沿用 Bun 默认(遵循 http_proxy/https_proxy/NO_PROXY 环境变量,启动时确定)
+ * - 设置为 URL(如 http://127.0.0.1:6152):所有书源请求显式走该代理
+ * - 注意 Bun 的 fetch 代理在启动时缓存,运行时删 env 无效;国内站直连请用 NO_PROXY 或清空代理后启动
+ */
+export function getSourceProxy(): string | undefined {
+  const v = (process.env.SOURCE_PROXY || '').trim();
+  return v || undefined;
+}
+
 export class SourceFetchError extends Error {
   webView: boolean;
   constructor(message: string, webView = false) {
@@ -231,6 +242,8 @@ export async function sourceFetch(
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeout);
   init.signal = controller.signal;
+  const proxyUrl = getSourceProxy();
+  if (proxyUrl) (init as any).proxy = proxyUrl;
 
   let res: Response;
   try {
@@ -304,6 +317,7 @@ export function syncFetchText(
 ): string {
   const h = opts.headers || {};
   const method = (opts.method || 'GET').toUpperCase();
+  const proxyUrl = getSourceProxy();
   const script = `
 const r = await fetch(${JSON.stringify(url)}, {
   method: ${JSON.stringify(method)},
@@ -311,6 +325,7 @@ const r = await fetch(${JSON.stringify(url)}, {
   body: ${JSON.stringify(opts.body ?? null)},
   redirect: 'follow',
   signal: AbortSignal.timeout(${opts.timeout ?? 20_000}),
+${proxyUrl ? `  proxy: ${JSON.stringify(proxyUrl)},` : ''}
 });
 const buf = await r.arrayBuffer();
 const ct = r.headers.get('content-type') || '';
