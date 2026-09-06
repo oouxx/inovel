@@ -459,6 +459,16 @@ export async function getChapterMedia(
     items.length = 0;
     items.push(...urls);
   }
+  // 音频:内容可能是 <audio src> / <source src> HTML,提取 src(镜像图片路径的兑底)
+  if (kind === 'audio') {
+    const fixed: string[] = [];
+    for (const v of items) {
+      const m = v.match(/<(?:audio|source)\b[^>]*?\bsrc\s*=\s*["']?([^"'\s>]+)/i);
+      fixed.push(m ? m[1].trim() : v);
+    }
+    items.length = 0;
+    items.push(...fixed);
+  }
   // 音频取首个资源;图片保留全部(去重保序);相对地址按章节页解析
   let finalItems = kind === 'audio' ? items.slice(0, 1) : items.filter((x, i) => items.indexOf(x) === i);
   finalItems = finalItems.map((x) => {

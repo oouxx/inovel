@@ -78,6 +78,32 @@ async function loadChapter() {
   } finally {
     mediaLoading.value = false;
   }
+  // 对齐原版预下载:本章就绪后,后台预取相邻章媒体(服务端有 30min 缓存,翻章零等待)
+  prefetchNeighbors();
+}
+
+// ---- 预抓取(对齐原版 ReadManga:当前章 ±1、后 2 章均会加载) ----
+// 漫画/音频:预取媒体列表;漫画顺带预热下一章前 2 张图(浏览器缓存);
+// 文字源无媒体缓存,不预取。结果仅在服务端缓存,不渲染。
+const prefetched = new Set<string>();
+async function prefetchNeighbors() {
+  if (!book.value || kind.value === 'text') return;
+  const targets = [chapters.value[current.value + 1], chapters.value[current.value + 2], chapters.value[current.value - 1]];
+  for (const ch of targets) {
+    if (!ch?.url || prefetched.has(ch.url)) continue;
+    prefetched.add(ch.url);
+    try {
+      const m = await api.onlineMedia(book.value.sourceUrl, ch.url, ch.title, book.value.name, book.value.author);
+      // 漫画:预热下一章首屏前 2 张图,翻章首屏更快
+      if (m.kind === 'image') {
+        for (const u of m.items.slice(0, 2)) {
+          fetch(api.onlineImgUrl(u, book.value.sourceUrl, ch.url)).catch(() => undefined);
+        }
+      }
+    } catch {
+      // 预取失败不影响阅读
+    }
+  }
 }
 
 async function retry() {
