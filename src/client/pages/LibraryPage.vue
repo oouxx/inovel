@@ -62,14 +62,14 @@ watch(books, regroup, { immediate: true });
 <template>
   <div class="mx-auto max-w-5xl px-5 pb-24">
     <!-- 顶栏 -->
-    <header class="flex items-center justify-between py-6">
-      <div class="flex items-center gap-3">
-        <div class="w-9 h-9 rounded-xl flex items-center justify-center" style="background: var(--accent-soft)">
+    <header class="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 py-4 sm:py-6">
+      <div class="flex items-center gap-3 min-w-0">
+        <div class="w-9 h-9 rounded-xl flex items-center justify-center shrink-0" style="background: var(--accent-soft)">
           <Library class="w-5 h-5 accent" />
         </div>
-        <div>
+        <div class="min-w-0">
           <h1 class="text-lg font-semibold leading-tight">我的书架</h1>
-          <p class="text-xs text-dim">
+          <p class="text-xs text-dim truncate">
             本地小说库 · {{ books.length }} 本
             <span v-if="stats && stats.todaySeconds > 60" class="inline-flex items-center gap-1 ml-1 accent">
               <Clock class="w-3 h-3" /> 今日 {{ fmtDur(stats.todaySeconds) }}
@@ -78,10 +78,10 @@ watch(books, regroup, { immediate: true });
         </div>
       </div>
       <nav class="flex items-center gap-2">
-        <RouterLink to="/books" class="btn"><LayoutGrid class="w-4 h-4" /> 全部</RouterLink>
-        <RouterLink to="/online" class="btn"><Compass class="w-4 h-4" /> 在线</RouterLink>
-        <RouterLink to="/search" class="btn"><Search class="w-4 h-4" /> 搜索</RouterLink>
-        <RouterLink to="/settings" class="btn"><Settings2 class="w-4 h-4" /> 管理</RouterLink>
+        <RouterLink to="/books" class="btn !px-3" title="全部书籍"><LayoutGrid class="w-4 h-4" /><span class="hidden sm:inline">全部</span></RouterLink>
+        <RouterLink to="/online" class="btn !px-3" title="在线书源"><Compass class="w-4 h-4" /><span class="hidden sm:inline">在线</span></RouterLink>
+        <RouterLink to="/search" class="btn !px-3" title="全文搜索"><Search class="w-4 h-4" /><span class="hidden sm:inline">搜索</span></RouterLink>
+        <RouterLink to="/settings" class="btn !px-3" title="导入与管理"><Settings2 class="w-4 h-4" /><span class="hidden sm:inline">管理</span></RouterLink>
       </nav>
     </header>
 
