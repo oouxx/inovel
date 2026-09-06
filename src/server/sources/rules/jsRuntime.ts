@@ -21,6 +21,8 @@ export interface JsHost {
   messages: string[];
   /** 书源原始 JSON(loginUrl/bookSourceComment 等供 eval 使用) */
   sourceRaw?: any;
+  /** URL 模板变量(key/page)—— Legado @js 规则可用 key/page 全局变量 */
+  urlVars?: Record<string, any>;
 }
 
 export type JsJava = Record<string, any>;
@@ -170,6 +172,27 @@ export function runJs(code: string, host: JsHost): any {
     enabled: true,
   };
 
+  const cacheShim = (() => {
+    const store = new Map<string, string>();
+    const api = {
+      get: (k: string) => store.get(String(k)) ?? '',
+      put: (k: string, v: any, _saveTime?: number) => {
+        store.set(String(k), String(v));
+        return '';
+      },
+      putMemory: (k: string, v: any) => {
+        store.set('m:' + String(k), String(v));
+        return '';
+      },
+      getMemory: (k: string) => store.get('m:' + String(k)) ?? '',
+      delete: (k: string) => {
+        store.delete(String(k));
+        return '';
+      },
+    };
+    return api;
+  })();
+
   const book = new Proxy(host.book, {
     get(t, p: string) {
       if (p === 'variable') return t['variable'] ?? '';
@@ -187,17 +210,21 @@ export function runJs(code: string, host: JsHost): any {
     },
   });
 
+  // jsLib:源级 JS 库(Legado 语义,随规则脚本一并求值)
+  const lib = typeof host.sourceRaw?.jsLib === 'string' && host.sourceRaw.jsLib.trim()
+    ? host.sourceRaw.jsLib + '\n;\n'
+    : '';
   const fn = new Function(
-    'result', 'baseUrl', 'book', 'source', 'java', 'cookie', 'cookieJar', 'org',
-    `return eval(${JSON.stringify(code)});\n`,
+    'result', 'src', 'baseUrl', 'book', 'source', 'java', 'cookie', 'cookieJar', 'org', 'key', 'page', 'cache',
+    `return eval(${JSON.stringify(lib + code)});\n`,
   );
   try {
     // Java 风格 String.replaceAll/replaceFirst(仅在本同步调用期间生效)
     const restore = patchJavaStringMethods();
     try {
       return fn(
-        host.rawText ?? '', host.baseUrl, book, source, java, cookie, cookie,
-        createJsoupShim(host.$),
+        host.rawText ?? '', host.rawText ?? '', host.baseUrl, book, source, java, cookie, cookie,
+        createJsoupShim(host.$), host.urlVars?.key ?? '', host.urlVars?.page ?? 1, cacheShim,
       );
     } finally {
       restore();

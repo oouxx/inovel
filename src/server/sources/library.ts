@@ -28,11 +28,12 @@ export async function addOnlineBook(
   const db = getDb();
   const now = Date.now();
   // 先取详情(解析 tocUrl 与规范化的书名/作者/封面),再抓目录
-  const { info } = await getBookInfo(sourceUrl, bookUrl);
+  const sessionVars = new Map<string, string>();
+  const { info } = await getBookInfo(sourceUrl, bookUrl, sessionVars);
   const finalName = info.name || name;
   const finalAuthor = info.author || author;
   const finalCover = info.coverUrl || coverUrl;
-  const chapters = (await getToc(sourceUrl, info.tocUrl || bookUrl)).chapters;
+  const chapters = (await getToc(sourceUrl, info.tocUrl || bookUrl, sessionVars)).chapters;
 
   const existing = db
     .query('SELECT id FROM online_books WHERE source_url = ? AND book_url = ?')

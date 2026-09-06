@@ -122,6 +122,7 @@ export async function searchSource(
 
   const res = await fetchPage(ctx, url, options);
   const env = makeEnv(ctx, res.body, res.finalUrl);
+  (env as any).urlVars = { key, searchKey: key, page };
   const rule = ctx.raw.ruleSearch ?? {};
 
   const items = evalRuleList(env, rule.bookList);
@@ -257,16 +258,21 @@ export async function getToc(
   while (url && pages < MAX_TOC_PAGES && chapters.length < MAX_CHAPTERS) {
     if (visited.has(url)) break;
     visited.add(url);
-    const res = await fetchPage(ctx, url, {});
+    const { url: tu, options: to } = splitFetchOptions(url);
+    const res = await fetchPage(ctx, tu, to);
     const env = makeEnv(ctx, res.body, res.finalUrl, sessionVars);
     const items = evalRuleList(env, rule.chapterList);
     for (const item of items) {
       const title = evalRuleText(env, rule.chapterName, item);
       const urlRaw = evalRuleText(env, rule.chapterUrl, item);
       if (!urlRaw && !title) continue;
+      // 先分离 URL options 再解析相对地址,避免选项被编码进路径
+      const cu0 = (urlRaw.split('\n')[0] ?? '').trim();
+      const { url: cu0Path, options: cu0Opts } = splitFetchOptions(cu0Path_raw(cu0));
+      const cuAbs = absoluteUrl(res.finalUrl, cu0Path);
       chapters.push({
         title: title || '未知章节',
-        url: absoluteUrl(res.finalUrl, (urlRaw.split('\n')[0] ?? '').trim()),
+        url: cu0Opts.method || cu0Opts.body ? `${cuAbs},${JSON.stringify(cu0Opts)}` : cuAbs,
         updateTime: evalRuleText(env, rule.updateTime, item) || undefined,
         isVip: evalRuleText(env, rule.isVip, item) === 'true' ? true : undefined,
       });
@@ -394,6 +400,21 @@ export async function getChapterMedia(
   if (!items.length && !ctx.messages.length) {
     throw new SourceEngineError('未解析到媒体内容(章节可能需要登录/VIP,或规则失效)');
   }
+  // 图片类:内容可能是 <img src> HTML(如包子漫画的 js 拼接),提取 src
+  if (kind === 'image') {
+    const urls: string[] = [];
+    for (const v of items) {
+      if (/<img/i.test(v)) {
+        for (const m of v.matchAll(/<img\b[^>]*?src\s*=\s*["']?([^"'\s>]+)/gi)) {
+          if (m[1]) urls.push(m[1].trim());
+        }
+      } else {
+        urls.push(v);
+      }
+    }
+    items.length = 0;
+    items.push(...urls);
+  }
   // 音频取首个资源;图片保留全部(去重保序);相对地址按章节页解析
   let finalItems = kind === 'audio' ? items.slice(0, 1) : items.filter((x, i) => items.indexOf(x) === i);
   finalItems = finalItems.map((x) => {
@@ -404,6 +425,9 @@ export async function getChapterMedia(
   return { kind, items: finalItems };
 }
 
+function cu0Path_raw(s: string): string {
+  return s;
+}
 function splitFetchOptions(url: string): { url: string; options: Record<string, any> } {
   const m = url.match(/,\s*\{[\s\S]*\}\s*$/);
   if (!m || m.index === undefined) return { url, options: {} };

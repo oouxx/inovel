@@ -116,7 +116,8 @@ export function evalRuleList(env: RuleEnv, ruleStr: string | undefined): RuleIte
   };
 
   // <js> 前缀块
-  const { code, rest } = stripJsPrefix(rule);
+  const { code: jsCode0, rest } = stripJsPrefix(rule);
+  const code = jsCode0 && jsCode0.includes('{{') ? replaceTemplates(env, jsCode0, {}, false) : jsCode0;
   if (code) {
     const jsResult = runJs(code, makeHost(env, undefined));
     if (rest.trim()) {
@@ -157,13 +158,30 @@ function evalListCore(env: RuleEnv, rule: string): any {
   if (isXPathRule(rule)) {
     return evalXPath(env.$, rule, roots);
   }
+  const jsonCtx = env.json ?? tryParseJson(env.rawText);
+  const unwrap = (r: any[]) => (Array.isArray(r) && r.length === 1 && Array.isArray(r[0]) ? r[0] : r);
   if (rule.startsWith('$')) {
-    const json = env.json ?? tryParseJson(env.rawText);
-    if (json === undefined) return [];
-    let r = JSONPath({ path: rule, json, wrap: true }) as any[];
+    if (jsonCtx === undefined) return [];
+    let r = JSONPath({ path: rule, json: jsonCtx, wrap: true }) as any[];
     // Legado 语义:匹配值本身是数组时直接展开为列表(如 bookList $.data)
-    if (Array.isArray(r) && r.length === 1 && Array.isArray(r[0])) r = r[0];
+    r = unwrap(r);
+    // 嵌套结构取不到时递归下降($..)
+    if ((!r || !r.length) && !rule.includes('..')) {
+      try {
+        r = unwrap(JSONPath({ path: rule.replace(/^\$\./, '$..'), json: jsonCtx, wrap: true }) as any[]);
+      } catch {}
+    }
     return r;
+  }
+  // JSON 响应(Legado 语义):非 $ 开头的规则自动按 JSONPath 解析(补 $ 前缀;取不到再 $.. 递归)
+  if (jsonCtx !== undefined && isJsonResponse(env) && !rule.startsWith(':') && !isXPathRule(rule)) {
+    try {
+      let r = unwrap(JSONPath({ path: '$' + rule, json: jsonCtx, wrap: true }) as any[]);
+      if ((!r || !r.length)) {
+        r = unwrap(JSONPath({ path: '$..' + rule.replace(/^[.[]/, '').replace(/^/, ''), json: jsonCtx, wrap: true }) as any[]);
+      }
+      if (r && r.length) return r;
+    } catch {}
   }
   // jsoup 默认
   const res = evalJsoupChain(env.$, rule, docRootElements(env.$));
@@ -171,8 +189,11 @@ function evalListCore(env: RuleEnv, rule: string): any {
 }
 
 function evalRuleCore(env: RuleEnv, rule: string, scope?: RuleItem): string[] {
+  const scopedEnv0: RuleEnv = scope?.json !== undefined ? { ...env, json: scope.json } : env;
+  const withTemplates = (code: string) =>
+    code.includes('{{') ? replaceTemplates(scopedEnv0, code, {}, false) : code;
   if (rule.startsWith('@js:')) {
-    const jsResult = runJs(rule.slice(4), makeHost(env, scope));
+    const jsResult = runJs(withTemplates(rule.slice(4)), makeHost(env, scope));
     return jsResultToStrings(jsResult);
   }
   // @js: 后缀:先求前段,再执行 js(result = 前段结果)
@@ -180,12 +201,12 @@ function evalRuleCore(env: RuleEnv, rule: string, scope?: RuleItem): string[] {
   if (jsSuffix) {
     const base = rule.slice(0, jsSuffix.index).trim();
     const baseVals = base ? evalRuleCore(env, base, scope) : [env.rawText];
-    const jsResult = runJs(jsSuffix[1], makeHost(env, scope, baseVals.join('\n')));
+    const jsResult = runJs(withTemplates(jsSuffix[1]), makeHost(env, scope, baseVals.join('\n')));
     return jsResultToStrings(jsResult);
   }
   const { code, rest } = stripJsPrefix(rule);
   if (code) {
-    const jsResult = runJs(code, makeHost(env, scope));
+    const jsResult = runJs(withTemplates(code), makeHost(env, scope));
     if (!rest.trim()) return jsResultToStrings(jsResult);
     const subEnv = contentEnv(env, jsResult);
     return evalRuleText(subEnv, rest).split('\n').filter(Boolean);
@@ -218,9 +239,32 @@ function evalRuleCore(env: RuleEnv, rule: string, scope?: RuleItem): string[] {
   if (rule.startsWith('$')) {
     const json = scope?.json !== undefined ? scope.json : jsonScopeOrParse(env);
     if (json === undefined) return [];
-    const r = JSONPath({ path: rule, json, wrap: false });
+    let r = JSONPath({ path: rule, json, wrap: false });
+    if ((r == null || (Array.isArray(r) && !r.length)) && !rule.includes('..')) {
+      try {
+        r = JSONPath({ path: rule.replace(/^\$\./, '$..'), json, wrap: false });
+      } catch {}
+    }
     if (r == null) return [];
     return Array.isArray(r) ? r.map((x) => (typeof x === 'object' ? JSON.stringify(x) : String(x))) : [String(r)];
+  }
+  // JSON 响应:字段规则自动按 JSONPath 解析
+  if (
+    isJsonResponse(env) &&
+    !rule.startsWith(':') &&
+    !isXPathRule(rule) &&
+    !rule.includes('@') &&
+    /^[.[]/.test(rule)
+  ) {
+    const json = scope?.json !== undefined ? scope.json : jsonScopeOrParse(env);
+    if (json !== undefined) {
+      try {
+        const r = JSONPath({ path: '$' + rule, json, wrap: false });
+        if (r != null) {
+          return Array.isArray(r) ? r.map((x) => (typeof x === 'object' ? JSON.stringify(x) : String(x))) : [String(r)];
+        }
+      } catch {}
+    }
   }
 
   // jsoup 默认;json 项作用域时把对象序列化后仍可用 {{}} 模板,但选择器无意义 → 返回空
@@ -308,7 +352,12 @@ export function replaceTemplates(
       const json = env.json ?? tryParseJson(env.rawText);
       if (json === undefined) return '';
       try {
-        const r = JSONPath({ path: t, json, wrap: false });
+        let r = JSONPath({ path: t, json, wrap: false });
+        if ((r == null || (Array.isArray(r) && !r.length)) && !t.includes('..')) {
+          try {
+            r = JSONPath({ path: t.replace(/^\$\./, '$..'), json, wrap: false });
+          } catch {}
+        }
         if (r == null) return '';
         return Array.isArray(r) ? r.join(',') : String(r);
       } catch {
@@ -325,27 +374,24 @@ export function replaceTemplates(
       const v = String(urlVars[t]);
       return encodeKey && (t === 'key' || t === 'searchKey') ? encodeURIComponent(v) : v;
     }
-    // JS 表达式或多语句
+    // JS 表达式或多语句(jsLib 一并注入)
     const javaApi = createJavaApi(makeHost(env, undefined) as any);
+    const host0 = makeHost(env, undefined) as any;
+    const jslibCode = typeof env.sourceRaw?.jsLib === 'string' && env.sourceRaw.jsLib.trim()
+      ? env.sourceRaw.jsLib + '\n;\n'
+      : '';
+    const extraArgs = [javaApi, env.book, env.baseUrl, { getKey: () => env.sourceKey, getVariable: () => env.sourceVariable }];
     try {
-      const fn = new Function('key', 'page', 'searchKey', 'java', 'book', 'baseUrl', 'source', `return (${t});`);
-      const r = fn(
-        urlVars.key ?? '', urlVars.page ?? 1, urlVars.key ?? '',
-        javaApi, env.book, env.baseUrl,
-        { getKey: () => env.sourceKey, getVariable: () => env.sourceVariable },
-      );
+      const fn = new Function('key', 'page', 'searchKey', 'java', 'book', 'baseUrl', 'source', `return (${jslibCode}${t});`);
+      const r = fn(urlVars.key ?? '', urlVars.page ?? 1, urlVars.key ?? '', ...extraArgs);
       return r == null ? '' : String(r);
     } catch {
       try {
         const fn2 = new Function(
           'key', 'page', 'searchKey', 'java', 'book', 'baseUrl', 'source',
-          `return eval(${JSON.stringify(t)});`,
+          `return eval(${JSON.stringify(jslibCode + t)});`,
         );
-        const r2 = fn2(
-          urlVars.key ?? '', urlVars.page ?? 1, urlVars.key ?? '',
-          javaApi, env.book, env.baseUrl,
-          { getKey: () => env.sourceKey, getVariable: () => env.sourceVariable },
-        );
+        const r2 = fn2(urlVars.key ?? '', urlVars.page ?? 1, urlVars.key ?? '', ...extraArgs);
         return r2 == null ? '' : String(r2);
       } catch {
         return '';
@@ -358,6 +404,8 @@ export function makeHost(env: RuleEnv, scope?: RuleItem, resultOverride?: string
   let rawText = env.rawText;
   if (scope?.element) {
     rawText = env.$.html(scope.element as never) ?? rawText;
+  } else if (scope?.json !== undefined) {
+    rawText = JSON.stringify(scope.json);
   }
   if (resultOverride !== undefined) rawText = resultOverride;
   return {
@@ -373,6 +421,7 @@ export function makeHost(env: RuleEnv, scope?: RuleItem, resultOverride?: string
     book: env.book,
     messages: env.messages,
     sourceRaw: (env as any).sourceRaw,
+    urlVars: (env as any).urlVars,
   };
 }
 
@@ -442,6 +491,11 @@ function tryParseJson(s: string): unknown {
   } catch {
     return undefined;
   }
+}
+
+function isJsonResponse(env: RuleEnv): boolean {
+  const t = (env.rawText || '').trim();
+  return t.startsWith('{') || t.startsWith('[');
 }
 
 function jsonScopeOrParse(env: RuleEnv): unknown {

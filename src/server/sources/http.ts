@@ -176,9 +176,17 @@ export async function sourceFetchBinary(
     res = await fetch(url, { method: (opts.method || 'GET').toUpperCase(), headers, signal: controller.signal, redirect: 'follow' });
   } catch (e: any) {
     clearTimeout(timer);
-    throw new SourceFetchError(`资源请求失败: ${String(e?.message || e)}`, false);
+    const msg = String(e?.message || e);
+    if (/certificate|TLS|SSL/i.test(msg)) {
+      try {
+        res = await fetch(url, { method: 'GET', headers, redirect: 'follow', tls: { rejectUnauthorized: false } } as any);
+      } catch (e2: any) {
+        throw new SourceFetchError(`资源请求失败: ${String(e2?.message || e2)}`, false);
+      }
+    } else {
+      throw new SourceFetchError(`资源请求失败: ${msg}`, false);
+    }
   }
-  clearTimeout(timer);
   const buf = await res.arrayBuffer();
   mergeSetCookies(url, res);
   return { buf, contentType: res.headers.get('content-type') || 'application/octet-stream', status: res.status };
