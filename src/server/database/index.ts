@@ -21,17 +21,18 @@ export function initDb(dataDir: string): Database {
   _db.exec('PRAGMA synchronous = NORMAL;');
   _db.exec('PRAGMA foreign_keys = ON;');
   migrate(_db);
+  // 在线书源功能已移除:清理旧版本遗留的表
+  _db.exec(`
+    DROP TABLE IF EXISTS online_progress;
+    DROP TABLE IF EXISTS online_books;
+    DROP TABLE IF EXISTS source_cookies;
+    DROP TABLE IF EXISTS book_sources;
+  `);
   try {
     _db.exec('ALTER TABLE books ADD COLUMN tags TEXT DEFAULT \'[]\'');
   } catch {
     // 列已存在
   }
-  try {
-    _db.exec("ALTER TABLE book_sources ADD COLUMN variable TEXT DEFAULT ''");
-  } catch {}
-  try {
-    _db.exec("ALTER TABLE book_sources ADD COLUMN login_info TEXT DEFAULT '{}'");
-  } catch {}
   return _db;
 }
 
@@ -111,45 +112,6 @@ function migrate(db: Database) {
       author,
       category,
       tokenize = 'unicode61'
-    );
-
-    CREATE TABLE IF NOT EXISTS book_sources (
-      book_source_url TEXT PRIMARY KEY,
-      name            TEXT NOT NULL,
-      group_name      TEXT,
-      enabled         INTEGER DEFAULT 1,
-      enabled_explore INTEGER DEFAULT 0,
-      custom_order    INTEGER DEFAULT 0,
-      raw             TEXT NOT NULL,
-      last_import_at  INTEGER,
-      respond_time    INTEGER
-    );
-
-    CREATE TABLE IF NOT EXISTS source_cookies (
-      source_url TEXT PRIMARY KEY,
-      cookies    TEXT NOT NULL DEFAULT '{}',
-      updated_at INTEGER
-    );
-
-    CREATE TABLE IF NOT EXISTS online_books (
-      id             INTEGER PRIMARY KEY AUTOINCREMENT,
-      source_url     TEXT NOT NULL,
-      book_url       TEXT NOT NULL,
-      name           TEXT NOT NULL,
-      author         TEXT DEFAULT '',
-      cover_url      TEXT DEFAULT '',
-      source_type    INTEGER DEFAULT 0,
-      toc            TEXT,
-      toc_updated_at INTEGER,
-      created_at     INTEGER,
-      UNIQUE(source_url, book_url)
-    );
-
-    CREATE TABLE IF NOT EXISTS online_progress (
-      online_book_id INTEGER PRIMARY KEY,
-      chapter_index  INTEGER DEFAULT 0,
-      position       REAL DEFAULT 0,
-      updated_at     INTEGER
     );
   `);
 }

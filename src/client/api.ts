@@ -1,18 +1,7 @@
 // 统一 API 封装
 import type {
   Book,
-  BookSource,
   ChapterMeta,
-  OnlineBookInfo,
-  OnlineChapterMedia,
-  OnlineSearchFlatResult,
-  OnlineLibraryBook,
-  OnlineChapter,
-  OnlineDownloadTask,
-  OnlineExploreCategory,
-  OnlineSearchBook,
-  OnlineSearchResult,
-  OnlineSourceTestResult,
   ReadingProgress,
   ScanResult,
   ScanStatus,
@@ -126,77 +115,6 @@ export const api = {
   ) => http<{ ok: boolean; book: Book }>(`/api/books/${bookId}`, { method: 'PATCH', body: JSON.stringify(data) }),
   deleteBook: (bookId: number) =>
     http<{ ok: boolean; fileRemoved: boolean; title: string }>(`/api/books/${bookId}`, { method: 'DELETE' }),
-  // ---- 在线书源(Legado) ----
-  onlineSources: () => http<{ sources: BookSource[] }>(`/api/online/sources`).then((r) => r.sources),
-  importSource: (data: { url?: string; text?: string }) =>
-    http<{ ok: boolean; added: number; updated: number; total: number }>(`/api/online/sources/import`, {
-      method: 'POST',
-      body: JSON.stringify(data),
-    }),
-  deleteSource: (url: string) => http<{ ok: boolean }>(`/api/online/sources/${encodeURIComponent(url)}`, { method: 'DELETE' }),
-  toggleSource: (url: string, enabled: boolean) =>
-    http<{ ok: boolean }>(`/api/online/sources/${encodeURIComponent(url)}`, {
-      method: 'PATCH',
-      body: JSON.stringify({ enabled }),
-    }),
-  testSource: (sourceUrl: string, keyword: string) =>
-    http<OnlineSourceTestResult>(`/api/online/sources/test`, {
-      method: 'POST',
-      body: JSON.stringify({ sourceUrl, keyword }),
-    }),
-  onlineSearch: (q: string, page = 1, precision = true) =>
-    http<OnlineSearchFlatResult>(
-      `/api/online/search?q=${encodeURIComponent(q)}&page=${page}${precision ? '' : '&precision=0'}`,
-    ),
-  onlineSearchGrouped: (q: string, page = 1, precision = true) =>
-    http<{ results: OnlineSearchResult[]; total: number; costMs: number }>(
-      `/api/online/search?q=${encodeURIComponent(q)}&page=${page}&mode=grouped${precision ? '' : '&precision=0'}`,
-    ),
-  onlineBook: (source: string, bookUrl: string) =>
-    http<{ info: OnlineBookInfo; messages: string[] }>(
-      `/api/online/book?source=${encodeURIComponent(source)}&bookUrl=${encodeURIComponent(bookUrl)}`,
-    ),
-  onlineToc: (source: string, bookUrl: string) =>
-    http<{ chapters: OnlineChapter[]; cached?: boolean; messages?: string[] }>(
-      `/api/online/toc?source=${encodeURIComponent(source)}&bookUrl=${encodeURIComponent(bookUrl)}`,
-    ),
-  onlineContent: (source: string, url: string, title: string) =>
-    http<{ content: string; messages: string[]; images?: string[] }>(
-      `/api/online/content?source=${encodeURIComponent(source)}&url=${encodeURIComponent(url)}&title=${encodeURIComponent(title)}`,
-    ),
-  onlineExplore: (source: string) =>
-    http<{ categories: OnlineExploreCategory[]; messages?: string[]; disabled?: boolean }>(
-      `/api/online/explore?source=${encodeURIComponent(source)}`,
-    ),
-  onlineExploreBooks: (source: string, url: string) =>
-    http<{ books: OnlineSearchBook[]; messages: string[]; sourceType: number }>(
-      `/api/online/explore/books?source=${encodeURIComponent(source)}&url=${encodeURIComponent(url)}`,
-    ),
-  createDownload: (source: string, bookUrl: string) =>
-    http<{ ok: boolean; task: OnlineDownloadTask }>(`/api/online/download`, {
-      method: 'POST',
-      body: JSON.stringify({ source, bookUrl }),
-    }),
-  downloadTasks: () => http<{ tasks: OnlineDownloadTask[] }>(`/api/online/tasks`).then((r) => r.tasks),
-  cancelDownload: (id: string) => http<{ ok: boolean }>(`/api/online/tasks/${id}/cancel`, { method: 'POST' }),
-  // ---- 在线书架(音频/漫画流式阅读) ----
-  onlineLibrary: () => http<{ books: OnlineLibraryBook[] }>(`/api/online/library`).then((r) => r.books),
-  addToLibrary: (data: { source: string; bookUrl: string; name: string; author: string; coverUrl: string; sourceType: number }) =>
-    http<{ ok: boolean; book: OnlineLibraryBook }>(`/api/online/library`, { method: 'POST', body: JSON.stringify(data) }),
-  onlineLibraryBook: (id: number) =>
-    http<{ book: OnlineLibraryBook; chapters: OnlineChapter[] }>(`/api/online/library/${id}`),
-  removeFromLibrary: (id: number) => http<{ ok: boolean }>(`/api/online/library/${id}`, { method: 'DELETE' }),
-  onlineMedia: (source: string, url: string, title: string, name?: string, author?: string) =>
-    http<OnlineChapterMedia>(
-      `/api/online/media?source=${encodeURIComponent(source)}&url=${encodeURIComponent(url)}&title=${encodeURIComponent(title)}&name=${encodeURIComponent(name ?? '')}&author=${encodeURIComponent(author ?? '')}`,
-    ),
-  onlineImgUrl: (u: string, source: string, ref: string) =>
-    `/api/online/img?u=${encodeURIComponent(u)}&source=${encodeURIComponent(source)}&ref=${encodeURIComponent(ref ?? '')}`,
-  onlineAudioUrl: (u: string, source: string, ref: string) =>
-    `/api/online/audio?u=${encodeURIComponent(u)}&source=${encodeURIComponent(source)}&ref=${encodeURIComponent(ref ?? '')}`,
-  onlineProgress: (id: number) => http<{ progress: { chapter_index: number; position: number } | null }>(`/api/online/progress/${id}`),
-  saveOnlineProgress: (id: number, chapter_index: number, position: number) =>
-    http<{ ok: boolean }>(`/api/online/progress/${id}`, { method: 'PUT', body: JSON.stringify({ chapter_index, position }) }),
 };
 
 export interface Bookmark {
