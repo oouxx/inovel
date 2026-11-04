@@ -2,8 +2,9 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue';
 import { api, type StatsSummary, type AIConfigInfo } from '@/api';
 import type { Book, ScanStatus } from '@shared/types';
+import PageHeader from '@/components/PageHeader.vue';
+import BookCover from '@/components/BookCover.vue';
 import {
-  ArrowLeft,
   RefreshCw,
   Upload,
   Database,
@@ -21,6 +22,7 @@ const status = ref<ScanStatus & { novelsDir: string } | null>(null);
 const books = ref<Book[]>([]);
 const stats = ref<StatsSummary | null>(null);
 const scanning = ref(false);
+const uploading = ref(false);
 const dragOver = ref(false);
 const uploadResults = ref<{ fileName: string; status: string; chapterCount: number; encoding: string; error?: string }[]>([]);
 let pollTimer: any = null;
@@ -67,6 +69,20 @@ const page = ref(1);
 const total = ref(0);
 const totalPages = computed(() => Math.max(1, Math.ceil(total.value / PAGE_SIZE)));
 
+const sections = [
+  { id: 'sec-scan', label: '扫描' },
+  { id: 'sec-ai', label: 'AI 助手' },
+  { id: 'sec-stats', label: '阅读统计' },
+  { id: 'sec-import', label: '批量导入' },
+  { id: 'sec-library', label: '书库列表' },
+];
+const maxDaySeconds = computed(() => Math.max(1, ...(stats.value?.days || []).map((d) => d.seconds)));
+
+function goSection(id: string) {
+  const behavior = window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth';
+  document.getElementById(id)?.scrollIntoView({ behavior: behavior as ScrollBehavior, block: 'start' });
+}
+
 async function goPage(p: number) {
   if (p < 1 || p > totalPages.value || p === page.value) return;
   page.value = p;
@@ -81,8 +97,14 @@ function fmtDuration(s: number) {
 }
 
 async function triggerScan() {
+  if (scanning.value) return;
   scanning.value = true;
-  await api.triggerScan();
+  try {
+    await api.triggerScan();
+  } catch (err: any) {
+    scanning.value = false;
+    alert(err?.message || '扫描失败');
+  }
 }
 
 async function onDrop(e: DragEvent) {
@@ -99,14 +121,16 @@ async function onPick(e: Event) {
 
 async function doUpload(files: File[]) {
   const txts = files.filter((f) => /\.txt$/i.test(f.name));
-  if (!txts.length) return;
-  scanning.value = true;
+  if (!txts.length || uploading.value) return;
+  uploading.value = true;
   try {
     const res = await api.upload(txts);
     uploadResults.value = [...res.results, ...uploadResults.value].slice(0, 50);
     await refresh();
+  } catch (err: any) {
+    alert(err?.message || '上传失败');
   } finally {
-    scanning.value = false;
+    uploading.value = false;
   }
 }
 
@@ -121,6 +145,7 @@ const aiSaving = ref(false);
 const aiTesting = ref(false);
 const aiTestResult = ref<{ ok: boolean; text: string } | null>(null);
 const aiSavedTip = ref(false);
+const aiError = ref('');
 
 const PROVIDER_LABELS: Record<string, string> = {
   openai: 'OpenAI 兼容(DeepSeek / 通义 / Ollama 等)',
@@ -142,6 +167,7 @@ function fillAIForm(c: AIConfigInfo) {
 async function saveAI(clearKey = false) {
   aiSaving.value = true;
   aiTestResult.value = null;
+  aiError.value = '';
   try {
     const payload: { provider: string; baseUrl: string; model: string; apiKey?: string } = {
       provider: aiForm.value.provider,
@@ -156,7 +182,7 @@ async function saveAI(clearKey = false) {
     aiSavedTip.value = true;
     setTimeout(() => (aiSavedTip.value = false), 2500);
   } catch (err: any) {
-    alert(err?.message || '保存失败');
+    aiError.value = err?.message || '保存失败';
   } finally {
     aiSaving.value = false;
   }
@@ -196,13 +222,29 @@ async function removeBook(b: Book) {
 
 <template>
   <div class="mx-auto max-w-4xl px-5 pb-24">
-    <header class="flex items-center gap-3 py-6">
-      <RouterLink to="/" class="btn !px-3"><ArrowLeft class="w-4 h-4" /></RouterLink>
-      <h1 class="text-lg font-semibold">书库管理</h1>
-    </header>
+    <PageHeader
+      title="书库管理"
+      :subtitle="status ? `${total} 本 · ${status.novelsDir}` : '扫描、导入与 AI 配置'"
+      back-to="/"
+    />
+
+    <!-- 分区导航 -->
+    <nav
+      class="sticky top-0 z-20 -mx-5 px-5 py-2 mb-5 flex gap-2 overflow-x-auto"
+      style="background: color-mix(in srgb, var(--bg) 88%, transparent); backdrop-filter: blur(12px); top: env(safe-area-inset-top)"
+    >
+      <button
+        v-for="s in sections"
+        :key="s.id"
+        class="btn !py-1.5 !text-xs shrink-0"
+        @click="goSection(s.id)"
+      >
+        {{ s.label }}
+      </button>
+    </nav>
 
     <!-- 扫描 -->
-    <section class="panel rounded-2xl p-5 mb-6">
+    <section id="sec-scan" class="panel rounded-2xl p-5 mb-6 scroll-mt-16">
       <div class="flex items-center justify-between flex-wrap gap-3">
         <div class="flex items-center gap-3">
           <Database class="w-5 h-5 accent" />
@@ -226,7 +268,7 @@ async function removeBook(b: Book) {
     </section>
 
     <!-- AI 配置 -->
-    <section class="panel rounded-2xl p-5 mb-6">
+    <section id="sec-ai" class="panel rounded-2xl p-5 mb-6 scroll-mt-16">
       <div class="flex items-center gap-3 mb-4">
         <Sparkles class="w-5 h-5 accent" />
         <div class="flex-1">
@@ -296,18 +338,19 @@ async function removeBook(b: Book) {
       <div v-if="aiTestResult" class="text-xs mt-3" :class="aiTestResult.ok ? 'text-dim' : 'text-red-500'">
         {{ aiTestResult.ok ? '✓ ' : '✗ ' }}{{ aiTestResult.text }}
       </div>
+      <div v-if="aiError" class="text-xs mt-3 text-red-500">✗ {{ aiError }}</div>
       <p class="text-[10px] text-dim mt-3">
         配置保存在服务端 data/ai-config.json;Key 仅服务端可见。阅读页右侧 AI 助手立即生效,无需重启。
       </p>
     </section>
 
     <!-- 阅读统计 -->
-    <section v-if="stats" class="panel rounded-2xl p-5 mb-6">
+    <section v-if="stats" id="sec-stats" class="panel rounded-2xl p-5 mb-6 scroll-mt-16">
       <div class="flex items-center gap-3 mb-3">
         <Clock class="w-5 h-5 accent" />
         <div class="font-medium">阅读统计</div>
       </div>
-      <div class="grid grid-cols-2 gap-3 mb-3">
+      <div class="grid grid-cols-2 gap-3 mb-4">
         <div class="rounded-xl p-3" style="background: var(--bg-soft)">
           <div class="text-xs text-dim">今日阅读</div>
           <div class="text-lg font-semibold mt-1">{{ fmtDuration(stats.todaySeconds) }}</div>
@@ -317,6 +360,29 @@ async function removeBook(b: Book) {
           <div class="text-lg font-semibold mt-1">{{ fmtDuration(stats.totalSeconds) }}</div>
         </div>
       </div>
+
+      <!-- 最近 14 天阅读时长 -->
+      <div v-if="stats.days.length" class="mb-4" title="最近 14 天阅读时长">
+        <div class="text-[11px] text-dim mb-1.5">最近 14 天</div>
+        <div class="flex items-end gap-1 h-14">
+          <div
+            v-for="d in stats.days"
+            :key="d.day"
+            class="flex-1 flex items-end"
+            :title="`${d.day} · ${fmtDuration(d.seconds)}`"
+          >
+            <div
+              class="w-full rounded-t transition-all"
+              :style="{
+                height: `${Math.max(2, (d.seconds / maxDaySeconds) * 52)}px`,
+                background: d.seconds ? 'var(--accent)' : 'var(--bg-soft)',
+                opacity: d.seconds ? 0.85 : 0.6,
+              }"
+            />
+          </div>
+        </div>
+      </div>
+
       <div v-if="stats.books.length" class="text-xs divide-y" style="border-color: var(--border)">
         <div v-for="b in stats.books.slice(0, 5)" :key="b.id" class="flex items-center py-2">
           <RouterLink :to="`/books/${b.id}`" class="truncate hover:accent">{{ b.title }}</RouterLink>
@@ -328,7 +394,8 @@ async function removeBook(b: Book) {
 
     <!-- 批量导入 -->
     <section
-      class="rounded-2xl border-2 border-dashed p-8 text-center mb-6 transition-colors"
+      id="sec-import"
+      class="rounded-2xl border-2 border-dashed p-8 text-center mb-6 transition-colors scroll-mt-16"
       :style="{
         borderColor: dragOver ? 'var(--accent)' : 'var(--border)',
         background: dragOver ? 'var(--accent-soft)' : 'transparent',
@@ -337,11 +404,11 @@ async function removeBook(b: Book) {
       @dragleave="dragOver = false"
       @drop.prevent="onDrop"
     >
-      <Upload class="w-8 h-8 mx-auto text-dim mb-3" />
-      <p class="text-sm">拖拽 TXT 文件到此处,或</p>
-      <label class="btn btn-primary mt-3 cursor-pointer">
+      <Upload class="w-8 h-8 mx-auto text-dim mb-3" :class="uploading && 'animate-pulse'" />
+      <p class="text-sm">{{ uploading ? '正在上传并解析…' : '拖拽 TXT 文件到此处,或' }}</p>
+      <label class="btn btn-primary mt-3 cursor-pointer" :class="uploading && 'opacity-50 pointer-events-none'">
         选择文件
-        <input type="file" multiple accept=".txt" class="hidden" @change="onPick" />
+        <input type="file" multiple accept=".txt" class="hidden" :disabled="uploading" @change="onPick" />
       </label>
       <p class="text-xs text-dim mt-3">文件将保存到 novels/uploads/ 并自动解析入库</p>
     </section>
@@ -363,20 +430,30 @@ async function removeBook(b: Book) {
     </div>
 
     <!-- 书库列表 -->
-    <section>
+    <section id="sec-library" class="scroll-mt-16">
       <div class="flex items-center justify-between mb-3">
         <h3 class="text-sm font-medium text-dim">书库 · 共 {{ total }} 本</h3>
         <span v-if="totalPages > 1" class="text-xs text-dim">第 {{ page }} / {{ totalPages }} 页</span>
       </div>
       <div class="panel rounded-2xl divide-y overflow-hidden" style="border-color: var(--border)">
         <div v-for="b in books" :key="b.id" class="flex items-center gap-3 px-4 py-3 text-sm">
-          <RouterLink :to="`/books/${b.id}`" class="font-medium truncate hover:accent max-w-[30%]">{{ b.title }}</RouterLink>
-          <span class="text-xs text-dim hidden sm:inline">{{ b.category || '未分类' }}</span>
-          <span class="text-xs text-dim hidden md:inline">{{ b.encoding }}</span>
-          <span class="text-xs text-dim ml-auto hidden sm:inline">{{ fmtSize(b.file_size) }}</span>
-          <span class="text-xs font-medium">{{ b.chapter_count }} 章</span>
-          <CheckCircle2 v-if="b.status === 'ok'" class="w-4 h-4" style="color: var(--accent)" />
-          <AlertTriangle v-else class="w-4 h-4" style="color: #c58a2d" />
+          <BookCover
+            :book-id="b.id"
+            :title="b.title"
+            class="w-8 h-11 shrink-0 !rounded !shadow-none"
+            initial-class="text-sm"
+          />
+          <RouterLink :to="`/books/${b.id}`" class="min-w-0 flex-1 hover:accent">
+            <div class="font-medium truncate">{{ b.title }}</div>
+            <div class="text-xs text-dim mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5">
+              <span>{{ b.category || '未分类' }}</span>
+              <span>{{ b.chapter_count }} 章</span>
+              <span class="hidden sm:inline">{{ b.encoding }}</span>
+              <span>{{ fmtSize(b.file_size) }}</span>
+            </div>
+          </RouterLink>
+          <CheckCircle2 v-if="b.status === 'ok'" class="w-4 h-4 shrink-0" style="color: var(--accent)" />
+          <AlertTriangle v-else class="w-4 h-4 shrink-0" style="color: #c58a2d" />
           <button
             class="btn !p-1.5 !border-0 text-dim hover:text-red-500 shrink-0"
             title="删除这本书"

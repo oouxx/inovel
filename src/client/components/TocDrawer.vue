@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue';
+import { ref, watch, computed, nextTick } from 'vue';
 import { api, type Bookmark, type FullTextHit } from '@/api';
 import type { ChapterMeta } from '@shared/types';
 import { X, Search, Bookmark as BookmarkIcon, ListTree, Loader2, Trash2 } from 'lucide-vue-next';
@@ -18,6 +18,9 @@ const tab = ref<Tab>('toc');
 const chapters = ref<ChapterMeta[]>([]);
 const query = ref('');
 const listEl = ref<HTMLElement | null>(null);
+const RENDER_CAP = 300;
+const SEARCH_CAP = 1000;
+const renderLimit = ref(RENDER_CAP);
 
 // 书签
 const bookmarks = ref<Bookmark[]>([]);
@@ -35,7 +38,10 @@ watch(
   async (open) => {
     if (!open) return;
     if (!chapters.value.length) chapters.value = await api.getChapters(props.bookId);
-    await scrollToCurrent();
+    // 当前章可能超过默认渲染上限,打开时确保它已渲染
+    renderLimit.value = Math.max(RENDER_CAP, props.currentIndex + 50);
+    await nextTick();
+    scrollToCurrent();
   },
 );
 
@@ -48,21 +54,23 @@ watch(tab, async (t) => {
 
 async function scrollToCurrent() {
   setTimeout(() => {
-    const el = listEl.value?.querySelector(`[data-index="${props.currentIndex}"]`);
-    el?.scrollIntoView({ block: 'center' });
+    const list = listEl.value;
+    const target = list?.querySelector(`[data-index="${props.currentIndex}"]`) as HTMLElement | null;
+    if (!list || !target) return;
+    const lr = list.getBoundingClientRect();
+    const tr = target.getBoundingClientRect();
+    list.scrollTop += tr.top - lr.top - list.clientHeight / 2 + tr.height / 2;
   }, 60);
 }
 
-const RENDER_CAP = 300;
-const filtered = () => {
+const matches = computed(() => {
   const q = query.value.trim().toLowerCase();
-  const list = q
-    ? chapters.value.filter((c) => c.title?.toLowerCase().includes(q.toLowerCase()))
-    : chapters.value;
-  // 超大书保护:仅渲染前 N 条,搜索可精确过滤
-  if (list.length > RENDER_CAP && !q) return list.slice(0, RENDER_CAP);
-  return list.slice(0, RENDER_CAP);
-};
+  return q ? chapters.value.filter((c) => c.title?.toLowerCase().includes(q)) : chapters.value;
+});
+const filtered = computed(() =>
+  query.value.trim() ? matches.value.slice(0, SEARCH_CAP) : matches.value.slice(0, renderLimit.value),
+);
+const hasMore = computed(() => filtered.value.length < matches.value.length);
 
 // ---- 书签 ----
 async function removeBookmark(id: number) {
@@ -98,6 +106,9 @@ async function doFind() {
     findLoading.value = false;
   }
 }
+watch(query, () => {
+  renderLimit.value = RENDER_CAP;
+});
 watch(() => props.bookId, () => {
   bookmarks.value = [];
   bookmarksLoaded.value = false;
@@ -106,6 +117,8 @@ watch(() => props.bookId, () => {
   findSearched.value = false;
   tab.value = 'toc';
   chapters.value = [];
+  query.value = '';
+  renderLimit.value = RENDER_CAP;
 });
 </script>
 
@@ -121,7 +134,9 @@ watch(() => props.bookId, () => {
         <div class="flex items-center justify-between px-4 py-3 border-b" style="border-color: var(--border)">
           <div class="min-w-0">
             <div class="text-sm font-medium truncate">{{ bookTitle }}</div>
-            <div class="text-xs text-dim">{{ chapters.length }} 章</div>
+            <div class="text-xs text-dim">
+              {{ query.trim() ? `${matches.length} 条匹配` : `${chapters.length} 章` }}
+            </div>
           </div>
           <button class="btn !p-2 !border-0" @click="emit('update:open', false)"><X class="w-4 h-4" /></button>
         </div>
@@ -153,14 +168,8 @@ watch(() => props.bookId, () => {
             </div>
           </div>
           <div ref="listEl" class="flex-1 overflow-y-auto py-1">
-            <div
-              v-if="chapters.length > RENDER_CAP && !query.trim()"
-              class="px-4 py-1.5 text-xs text-dim"
-            >
-              仅显示前 {{ RENDER_CAP }} 章,输入关键词可精确搜索
-            </div>
             <RouterLink
-              v-for="c in filtered()"
+              v-for="c in filtered"
               :key="c.id"
               :to="`/reader/${bookId}/${c.chapter_index}`"
               :data-index="c.chapter_index"
@@ -172,6 +181,12 @@ watch(() => props.bookId, () => {
               <span class="text-xs text-dim w-10 shrink-0 tabular-nums">{{ c.chapter_index + 1 }}</span>
               <span class="truncate">{{ c.title }}</span>
             </RouterLink>
+            <div v-if="hasMore" class="px-4 py-3 text-center">
+              <button v-if="!query.trim()" class="btn !py-1 !text-xs" @click="renderLimit += RENDER_CAP">
+                显示更多
+              </button>
+              <span v-else class="text-xs text-dim">仅显示前 {{ SEARCH_CAP }} 条匹配</span>
+            </div>
           </div>
         </template>
 

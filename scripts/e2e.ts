@@ -58,18 +58,18 @@ ok('正文段落渲染', paras >= 10, `found ${paras}`);
 ok('底栏初始可见', await page.locator('footer').isVisible());
 
 // 记录初始进度,翻页(多页章节)
-const p0 = await page.locator('footer span.tabular-nums').textContent();
+const p0 = await page.locator('footer').innerText();
 await page.keyboard.press('ArrowRight');
 await page.waitForTimeout(500);
-const p1 = await page.locator('footer span.tabular-nums').textContent();
-ok('翻页后进度变化', p0 !== p1, `${p0} → ${p1}`);
+const p1 = await page.locator('footer').innerText();
+ok('翻页后进度变化', p0 !== p1, `${p0.replace(/\n/g, ' | ')} → ${p1.replace(/\n/g, ' | ')}`);
 
 // 5. 进度保存与恢复:回到同章节 URL,应恢复到第 1 页后的位置
 await page.waitForTimeout(700); // 等待 debounce 保存
 await page.goto(BASE + `/reader/${BOOK_ID}/0`, { waitUntil: 'networkidle' });
 await page.waitForTimeout(1200);
-const p2 = await page.locator('footer span.tabular-nums').textContent();
-ok('重开恢复进度', p1 === p2, `${p2} (期望 ${p1})`);
+const p2 = await page.locator('footer').innerText();
+ok('重开恢复进度', p1 === p2, `${p2.replace(/\n/g, ' | ')} (期望 ${p1.replace(/\n/g, ' | ')})`);
 
 // 6. 键盘翻页到下一章
 await page.keyboard.press('Escape'); // 此时 UI 可见 → 隐藏
@@ -100,7 +100,7 @@ await page.keyboard.press('Escape'); // 关闭 AI 面板
 await page.waitForTimeout(400);
 
 // 9. 设置面板
-await page.click('button[title="设置"]');
+await page.click('button[title="阅读设置 (Aa)"]');
 await page.waitForTimeout(400);
 ok('阅读设置面板', await page.locator('text=阅读设置').isVisible());
 

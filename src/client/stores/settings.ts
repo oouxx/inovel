@@ -3,6 +3,7 @@ import { defineStore } from 'pinia';
 export type ThemeName = 'auto' | 'light' | 'sepia' | 'gray' | 'black';
 export type FontName = 'system' | 'serif' | 'sans';
 export type ReadMode = 'paged' | 'scroll';
+export type PageTurn = 'slide' | 'none';
 
 export interface ReaderSettings {
   theme: ThemeName;
@@ -10,9 +11,15 @@ export interface ReaderSettings {
   /** px */
   fontSize: number;
   lineHeight: number;
+  /** 段间距(em) */
+  paragraphSpacing: number;
+  /** 正文加粗(无障碍/弱光阅读) */
+  boldText: boolean;
   /** px,max-width of content */
   width: number;
   mode: ReadMode;
+  /** 分页翻页动画 */
+  pageTurn: PageTurn;
 }
 
 const KEY = 'novel-reader-settings';
@@ -22,8 +29,11 @@ const defaults: ReaderSettings = {
   font: 'system',
   fontSize: 18,
   lineHeight: 1.8,
+  paragraphSpacing: 1,
+  boldText: false,
   width: 680,
   mode: 'paged',
+  pageTurn: 'slide',
 };
 
 function load(): ReaderSettings {
@@ -63,6 +73,10 @@ export const useSettingsStore = defineStore('settings', {
     },
     set<K extends keyof ReaderSettings>(key: K, value: ReaderSettings[K]) {
       (this as any)[key] = value;
+      this.save();
+    },
+    reset() {
+      Object.assign(this, defaults);
       this.save();
     },
   },

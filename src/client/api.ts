@@ -40,6 +40,10 @@ export const api = {
     return http<{ books: Book[]; total: number }>(`/api/books?${qs}`);
   },
   getBook: (id: number) => http<{ book: Book }>(`/api/books/${id}`).then((r) => r.book),
+  continueReading: (limit = 4) =>
+    http<{ items: { book: Book; progress: ReadingProgress }[] }>(`/api/books/continue?limit=${limit}`).then(
+      (r) => r.items,
+    ),
   getChapters: (bookId: number) =>
     http<{ book: { id: number; title: string }; chapters: ChapterMeta[] }>(
       `/api/books/${bookId}/chapters`,

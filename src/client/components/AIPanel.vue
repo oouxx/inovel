@@ -337,9 +337,6 @@ const hasMessages = computed(() => messages.value.length > 0);
   }
 }
 .user-bubble {
-}
-.user-bubble,
-.user-bubble {
   background: var(--accent-soft);
 }
 /* ---- markstream-vue 主题融合:把阅读主题映射进库的 CSS 变量 ---- */

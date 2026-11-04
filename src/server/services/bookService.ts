@@ -49,6 +49,11 @@ export function getBook(id: number): Book | null {
 
 const COVER_EXTS = ['.jpg', '.jpeg', '.png', '.webp', '.gif'];
 
+/** 是否存在用户上传的自定义封面(服务端无封面时会动态生成 SVG) */
+export function hasCover(bookId: number): boolean {
+  return COVER_EXTS.some((ext) => existsSync(path.join(DATA_DIR(), 'covers', `${bookId}${ext}`)));
+}
+
 /**
  * 删除书籍:清理磁盘文件(仅限 NOVELS_DIR 内)、封面及所有关联数据
  * 返回是否成功移除了源文件
@@ -120,6 +125,32 @@ export function getProgress(bookId: number): ReadingProgress | null {
     .query('SELECT book_id, chapter_index, page, progress, updated_at FROM reading_progress WHERE book_id = ?')
     .get(bookId) as ReadingProgress | null;
   return row || null;
+}
+
+/** 首页「继续阅读」:按最近阅读时间取有进度的书 */
+export function listContinueBooks(limit = 4): { book: Book; progress: ReadingProgress }[] {
+  const rows = getDb()
+    .query(
+      `SELECT b.*, p.chapter_index AS p_chapter, p.page AS p_page, p.progress AS p_progress, p.updated_at AS p_updated
+       FROM reading_progress p JOIN books b ON b.id = p.book_id
+       WHERE p.progress > 0.001
+       ORDER BY p.updated_at DESC
+       LIMIT ?`,
+    )
+    .all(limit) as any[];
+  return rows.map((r) => {
+    const { p_chapter, p_page, p_progress, p_updated, ...book } = r;
+    return {
+      book: book as Book,
+      progress: {
+        book_id: book.id,
+        chapter_index: p_chapter,
+        page: p_page,
+        progress: p_progress,
+        updated_at: p_updated,
+      } as ReadingProgress,
+    };
+  });
 }
 
 export function saveProgress(bookId: number, data: { chapter_index: number; page: number; progress: number }) {

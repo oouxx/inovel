@@ -1,11 +1,10 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue';
-import { api } from '@/api';
-import type { Book } from '@shared/types';
-import type { ReadingProgress } from '@shared/types';
+import { ref, computed, onMounted } from 'vue';
+import { api, type StatsSummary } from '@/api';
+import type { Book, ReadingProgress } from '@shared/types';
 import BookCard from '@/components/BookCard.vue';
-import { Library, Search, Settings2, Clock, LayoutGrid } from 'lucide-vue-next';
-import { api as api2, type StatsSummary } from '@/api';
+import BookCover from '@/components/BookCover.vue';
+import { Library, Search, Settings2, Clock, LayoutGrid, BookOpen, ChevronRight } from 'lucide-vue-next';
 
 function fmtDur(s: number) {
   const m = Math.round(s / 60);
@@ -18,45 +17,35 @@ interface ContinueItem {
 }
 
 const books = ref<Book[]>([]);
-const categories = ref<{ name: string; count: number }[]>([]);
 const continueItems = ref<ContinueItem[]>([]);
 const loading = ref(true);
 const stats = ref<StatsSummary | null>(null);
 
 onMounted(async () => {
   try {
-    const [all, cats, st] = await Promise.all([api.listBooks(), api.categories(), api.stats().catch(() => null)]);
+    const [all, st, cont] = await Promise.all([
+      api.listBooks(),
+      api.stats().catch(() => null),
+      api.continueReading(4).catch(() => []),
+    ]);
     stats.value = st;
     books.value = all;
-    categories.value = cats;
-    // 继续阅读:取有进度且进度 > 0 的书,按 updated_at 排序
-    const withProgress = await Promise.all(
-      all.slice(0, 60).map(async (book) => {
-        const progress = await api.getProgress(book.id);
-        return progress && progress.progress > 0.001 ? { book, progress } : null;
-      }),
-    );
-    continueItems.value = withProgress
-      .filter((x): x is ContinueItem => x !== null)
-      .sort((a, b) => b.progress.updated_at - a.progress.updated_at)
-      .slice(0, 4);
+    continueItems.value = cont;
   } finally {
     loading.value = false;
   }
 });
 
-const grouped = ref<Record<string, Book[]>>({});
-// 按分类分组
-function regroup() {
+const grouped = computed(() => {
   const g: Record<string, Book[]> = {};
   for (const b of books.value) {
     const key = b.category || '未分类';
     (g[key] ||= []).push(b);
   }
-  grouped.value = g;
-}
-import { watch } from 'vue';
-watch(books, regroup, { immediate: true });
+  return g;
+});
+
+const totalChapters = computed(() => books.value.reduce((n, b) => n + (b.chapter_count || 0), 0));
 </script>
 
 <template>
@@ -70,7 +59,7 @@ watch(books, regroup, { immediate: true });
         <div class="min-w-0">
           <h1 class="text-lg font-semibold leading-tight">我的书架</h1>
           <p class="text-xs text-dim truncate">
-            本地小说库 · {{ books.length }} 本
+            本地小说库 · {{ books.length }} 本 · {{ totalChapters }} 章
             <span v-if="stats && stats.todaySeconds > 60" class="inline-flex items-center gap-1 ml-1 accent">
               <Clock class="w-3 h-3" /> 今日 {{ fmtDur(stats.todaySeconds) }}
             </span>
@@ -78,47 +67,71 @@ watch(books, regroup, { immediate: true });
         </div>
       </div>
       <nav class="flex items-center gap-2">
-        <RouterLink to="/books" class="btn !px-3" title="全部书籍"><LayoutGrid class="w-4 h-4" /><span class="hidden sm:inline">全部</span></RouterLink>
-        <RouterLink to="/search" class="btn !px-3" title="全文搜索"><Search class="w-4 h-4" /><span class="hidden sm:inline">搜索</span></RouterLink>
-        <RouterLink to="/settings" class="btn !px-3" title="导入与管理"><Settings2 class="w-4 h-4" /><span class="hidden sm:inline">管理</span></RouterLink>
+        <RouterLink to="/books" class="btn !px-3" title="全部书籍">
+          <LayoutGrid class="w-4 h-4" /><span class="hidden sm:inline">全部</span>
+        </RouterLink>
+        <RouterLink to="/search" class="btn !px-3" title="搜索书库">
+          <Search class="w-4 h-4" /><span class="hidden sm:inline">搜索</span>
+        </RouterLink>
+        <RouterLink to="/settings" class="btn !px-3" title="导入与管理">
+          <Settings2 class="w-4 h-4" /><span class="hidden sm:inline">管理</span>
+        </RouterLink>
       </nav>
     </header>
 
     <!-- 继续阅读 -->
     <section v-if="continueItems.length" class="mb-10">
-      <h2 class="text-sm font-medium text-dim mb-3">继续阅读</h2>
+      <div class="flex items-baseline justify-between mb-3">
+        <h2 class="text-sm font-medium text-dim">继续阅读</h2>
+        <span class="text-xs text-dim">{{ continueItems.length }} 本</span>
+      </div>
       <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <RouterLink
           v-for="item in continueItems"
           :key="item.book.id"
           :to="`/reader/${item.book.id}/${item.progress.chapter_index}`"
-          class="panel rounded-2xl p-4 flex items-center gap-4 hover:-translate-y-0.5 transition-transform"
+          class="panel rounded-2xl p-3.5 flex items-center gap-3.5 hover:-translate-y-0.5 hover:shadow-md transition-all"
         >
-          <div
-            class="book-cover !shadow-none w-12 h-16 shrink-0 rounded-md flex items-center justify-center"
-            style="background: linear-gradient(145deg, hsl(28 45% 55%), hsl(10 40% 40%))"
-          >
-            <span class="text-white font-semibold">{{ item.book.title.slice(0, 1) }}</span>
-          </div>
+          <BookCover
+            :book-id="item.book.id"
+            :title="item.book.title"
+            class="w-12 h-16 shrink-0 !rounded-md !shadow-none"
+            initial-class="text-base"
+          />
           <div class="min-w-0 flex-1">
             <div class="font-medium truncate">{{ item.book.title }}</div>
-            <div class="text-xs text-dim mt-0.5">
-              第 {{ item.progress.chapter_index + 1 }} 章 · {{ Math.round(item.progress.progress * 100) }}%
+            <div class="text-xs text-dim mt-0.5 truncate">
+              第 {{ item.progress.chapter_index + 1 }} 章 · 本章 {{ Math.round(item.progress.progress * 100) }}%
             </div>
             <div class="mt-2 h-1 rounded-full overflow-hidden" style="background: var(--bg-soft)">
               <div
                 class="h-full rounded-full"
-                :style="{ width: `${Math.max(2, Math.round(item.progress.progress * 100))}%`, background: 'var(--accent)' }"
+                :style="{
+                  width: `${Math.max(2, Math.round(item.progress.progress * 100))}%`,
+                  background: 'var(--accent)',
+                }"
               />
             </div>
           </div>
-          <span class="text-xs accent shrink-0">继续 →</span>
+          <ChevronRight class="w-4 h-4 text-dim shrink-0" />
         </RouterLink>
       </div>
     </section>
 
+    <!-- 加载骨架 -->
+    <section v-if="loading">
+      <div class="h-4 w-20 rounded skeleton mb-4" />
+      <div class="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-4">
+        <div v-for="i in 12" :key="i">
+          <div class="w-full aspect-[5/7] rounded-lg skeleton" />
+          <div class="h-3.5 w-4/5 rounded skeleton mt-2.5" />
+          <div class="h-3 w-3/5 rounded skeleton mt-1.5" />
+        </div>
+      </div>
+    </section>
+
     <!-- 全部小说 -->
-    <section v-if="books.length">
+    <section v-else-if="books.length">
       <h2 class="text-sm font-medium text-dim mb-3">全部小说</h2>
       <div v-for="(list, cat) in grouped" :key="cat" class="mb-8">
         <div class="flex items-center gap-2 mb-3">
@@ -132,8 +145,10 @@ watch(books, regroup, { immediate: true });
     </section>
 
     <!-- 空状态 -->
-    <div v-else-if="!loading" class="text-center py-24">
-      <Compass class="w-10 h-10 mx-auto text-dim mb-4" />
+    <div v-else class="text-center py-24">
+      <div class="w-14 h-14 rounded-2xl mx-auto mb-4 flex items-center justify-center" style="background: var(--accent-soft)">
+        <BookOpen class="w-7 h-7 accent" />
+      </div>
       <p class="text-dim">书架空空如也</p>
       <p class="text-sm text-dim mt-1">将 TXT 文件放入 novels 目录,或到「管理」页批量导入</p>
       <RouterLink to="/settings" class="btn btn-primary mt-5">前往管理</RouterLink>

@@ -1,9 +1,14 @@
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue';
+import { ref, onMounted, computed, nextTick } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { api } from '@/api';
 import type { Book, ChapterMeta, ReadingProgress } from '@shared/types';
-import { ArrowLeft, BookOpen, PlayCircle, FileText, AlertTriangle, Pencil, ImagePlus, Check, X, Trash2 } from 'lucide-vue-next';
+import BookCover from '@/components/BookCover.vue';
+import PageHeader from '@/components/PageHeader.vue';
+import {
+  BookOpen, PlayCircle, FileText, AlertTriangle, Pencil, ImagePlus, ImageOff,
+  Check, X, Trash2,
+} from 'lucide-vue-next';
 
 const route = useRoute();
 const router = useRouter();
@@ -16,8 +21,7 @@ const loading = ref(true);
 const tocQuery = ref('');
 
 // 封面
-const coverOk = ref(true);
-const coverKey = ref(0);
+const coverVersion = ref(0);
 const uploading = ref(false);
 
 // 编辑信息
@@ -40,65 +44,97 @@ async function addTag() {
   const t = newTag.value.trim();
   if (!t || !book.value || tags.value.includes(t)) return;
   const r = await api.updateBook(bookId, { tags: [...tags.value, t].slice(0, 12) });
-  book.value = r.book;
+  book.value = { ...r.book, hasCover: book.value?.hasCover };
   newTag.value = '';
 }
 async function removeTag(t: string) {
   if (!book.value) return;
   const r = await api.updateBook(bookId, { tags: tags.value.filter((x) => x !== t) });
-  book.value = r.book;
+  book.value = { ...r.book, hasCover: book.value?.hasCover };
 }
 
 onMounted(async () => {
   try {
     book.value = await api.getBook(bookId);
     [chapters.value, progress.value] = await Promise.all([api.getChapters(bookId), api.getProgress(bookId)]);
+    await nextTick();
+    scrollToCurrentChapter();
   } finally {
     loading.value = false;
   }
 });
 
-const resumeChapter = computed(() => {
-  if (progress.value && progress.value.progress > 0.001) return progress.value.chapter_index;
-  return 0;
-});
-
-const filteredChapters = computed(() => {
-  const q = tocQuery.value.trim();
-  if (!q) return chapters.value;
-  return chapters.value.filter((c) => c.title?.toLowerCase().includes(q.toLowerCase()));
+const readProgress = computed(() =>
+  progress.value && progress.value.progress > 0.001 ? progress.value : null,
+);
+const resumeChapterIndex = computed(() => readProgress.value?.chapter_index ?? 0);
+const chapterPercent = computed(() => Math.round((readProgress.value?.progress ?? 0) * 100));
+const progressPercent = computed(() => {
+  const p = readProgress.value;
+  const b = book.value;
+  if (!p || !b) return 0;
+  const c = chapters.value.find((x) => x.chapter_index === p.chapter_index);
+  if (!c || !b.file_size) return chapterPercent.value;
+  const span = Math.max(1, c.end_offset - c.start_offset);
+  const abs = c.start_offset + p.progress * span;
+  return Math.round(Math.min(1, Math.max(0, abs / b.file_size)) * 100);
 });
 
 function goToReader() {
-  const p = resumeTarget();
-  window.location.href = `/reader/${bookId}/${p.chapterIndex}?page=${p.page}`;
+  const p = readProgress.value;
+  if (p) router.push(`/reader/${bookId}/${p.chapter_index}?pos=${p.progress}`);
+  else router.push(`/reader/${bookId}/0`);
 }
 
-function resumeTarget(): { chapterIndex: number; page: number } {
-  if (progress.value && progress.value.progress > 0.001) {
-    return { chapterIndex: progress.value.chapter_index, page: Math.max(0, progress.value.page) };
-  }
-  return { chapterIndex: 0, page: 0 };
+// ---- 目录:大书分批渲染 ----
+const RENDER_CAP = 400;
+const SEARCH_CAP = 800;
+const renderLimit = ref(RENDER_CAP);
+const tocMatches = computed(() => {
+  const q = tocQuery.value.trim().toLowerCase();
+  if (!q) return chapters.value;
+  return chapters.value.filter((c) => c.title?.toLowerCase().includes(q));
+});
+const filteredChapters = computed(() =>
+  tocQuery.value.trim()
+    ? tocMatches.value.slice(0, SEARCH_CAP)
+    : tocMatches.value.slice(0, renderLimit.value),
+);
+const hasMore = computed(() => filteredChapters.value.length < tocMatches.value.length);
+
+const tocList = ref<HTMLElement | null>(null);
+function scrollToCurrentChapter() {
+  const list = tocList.value;
+  const target = list?.querySelector('[data-current="true"]') as HTMLElement | null;
+  if (!list || !target) return;
+  const lr = list.getBoundingClientRect();
+  const tr = target.getBoundingClientRect();
+  list.scrollTop += tr.top - lr.top - list.clientHeight / 2 + tr.height / 2;
 }
 
 // ---- 封面 ----
 async function onCoverPick(e: Event) {
-  const file = (e.target as HTMLInputElement).files?.[0];
-  (e.target as HTMLInputElement).value = '';
+  const input = e.target as HTMLInputElement;
+  const file = input.files?.[0];
+  input.value = '';
   if (!file) return;
+  uploading.value = true;
   try {
     await api.uploadCover(bookId, file);
-    coverOk.value = true;
-    coverKey.value++;
+    if (book.value) book.value = { ...book.value, hasCover: true };
+    coverVersion.value++;
   } catch (err: any) {
     alert(err?.message || '上传失败');
+  } finally {
+    uploading.value = false;
   }
 }
 
 async function removeCover() {
+  if (!confirm('移除自定义封面?系统会自动生成一张占位封面。')) return;
   await api.removeCover(bookId).catch(() => {});
-  coverOk.value = false;
-  coverKey.value++;
+  if (book.value) book.value = { ...book.value, hasCover: false };
+  coverVersion.value++;
 }
 
 // ---- 删除 ----
@@ -129,7 +165,7 @@ async function saveEdit() {
   saving.value = true;
   try {
     const r = await api.updateBook(bookId, { title: editTitle.value, author: editAuthor.value });
-    book.value = r.book;
+    book.value = { ...r.book, hasCover: book.value?.hasCover };
     editing.value = false;
   } catch (err: any) {
     alert(err?.message || '保存失败');
@@ -141,55 +177,63 @@ async function saveEdit() {
 
 <template>
   <div class="mx-auto max-w-3xl px-5 pb-24">
-    <header class="flex items-center gap-3 py-6">
-      <RouterLink to="/" class="btn !px-3"><ArrowLeft class="w-4 h-4" /></RouterLink>
-      <h1 class="text-lg font-semibold">小说详情</h1>
-    </header>
+    <PageHeader title="小说详情" back-to="/" />
 
     <template v-if="book">
       <!-- 信息 -->
-      <div class="flex gap-6 items-start">
+      <div class="flex gap-4 sm:gap-6 items-start">
         <div class="relative shrink-0 group">
-          <div
-            class="book-cover w-28 aspect-[5/7] rounded-lg flex items-center justify-center overflow-hidden"
-            style="background: linear-gradient(145deg, hsl(210 40% 50%), hsl(250 35% 35%))"
-          >
-            <img
-              v-if="coverOk"
-              :src="api.coverUrl(bookId) + `?v=${coverKey}`"
-              :key="coverKey"
-              class="absolute inset-0 w-full h-full object-cover"
-              @error="coverOk = false"
-            />
-            <span v-else class="text-white text-4xl font-semibold">{{ book.title.slice(0, 1) }}</span>
-          </div>
+          <BookCover
+            :book-id="bookId"
+            :title="book.title"
+            :version="coverVersion"
+            eager
+            class="w-24 sm:w-28 aspect-[5/7] rounded-lg"
+            initial-class="text-4xl"
+          />
           <label
-            class="absolute inset-0 rounded-lg bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center text-white text-xs cursor-pointer"
-            title="上传封面"
+            class="absolute inset-0 rounded-lg bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity hidden sm:flex flex-col items-center justify-center text-white text-xs cursor-pointer"
+            title="更换封面"
           >
             <ImagePlus class="w-5 h-5 mb-1" />
             {{ uploading ? '上传中…' : '换封面' }}
-            <input type="file" accept="image/*" class="hidden" @change="onCoverPick" />
+            <input type="file" accept="image/*" class="hidden" :disabled="uploading" @change="onCoverPick" />
           </label>
+          <label
+            class="absolute top-1.5 right-1.5 sm:hidden w-7 h-7 rounded-full bg-black/55 text-white flex items-center justify-center cursor-pointer"
+            title="更换封面"
+          >
+            <ImagePlus class="w-3.5 h-3.5" />
+            <input type="file" accept="image/*" class="hidden" :disabled="uploading" @change="onCoverPick" />
+          </label>
+          <button
+            v-if="book.hasCover"
+            class="mt-1.5 w-full text-[11px] text-dim hover:text-red-500 inline-flex items-center justify-center gap-1"
+            title="移除自定义封面"
+            @click="removeCover"
+          >
+            <ImageOff class="w-3 h-3" /> 移除封面
+          </button>
         </div>
 
-        <div class="min-w-0 flex-1 pt-1">
+        <div class="min-w-0 flex-1 pt-0.5">
           <!-- 查看 / 编辑 -->
           <template v-if="!editing">
             <div class="flex items-start gap-2">
-              <h2 class="text-2xl font-bold leading-snug">{{ book.title }}</h2>
-              <button class="btn !p-1.5 !border-0 text-dim mt-1.5" title="编辑信息" @click="startEdit">
+              <h2 class="text-xl sm:text-2xl font-bold leading-snug min-w-0">{{ book.title }}</h2>
+              <button class="btn !p-1.5 !border-0 text-dim mt-0.5 shrink-0" title="编辑信息" @click="startEdit">
                 <Pencil class="w-3.5 h-3.5" />
               </button>
               <button
-                class="btn !p-1.5 !border-0 text-dim hover:text-red-500 mt-1.5"
+                class="btn !p-1.5 !border-0 text-dim hover:text-red-500 mt-0.5 shrink-0"
                 title="删除这本书"
                 :disabled="deletingBook"
-                @click="deleteBook">
+                @click="deleteBook"
+              >
                 <Trash2 class="w-3.5 h-3.5" />
               </button>
             </div>
-            <p class="text-sm text-dim mt-1">
+            <p class="text-sm text-dim mt-1 truncate">
               {{ book.author || '佚名' }}
               <span v-if="book.category"> · {{ book.category }}</span>
             </p>
@@ -208,7 +252,7 @@ async function saveEdit() {
           </template>
 
           <!-- 标签 -->
-          <div class="mt-3 flex flex-wrap items-center gap-1.5">
+          <div class="mt-2.5 flex flex-wrap items-center gap-1.5">
             <span
               v-for="t in tags"
               :key="t"
@@ -228,17 +272,33 @@ async function saveEdit() {
             </form>
           </div>
 
-          <p class="text-sm text-dim mt-2 flex items-center gap-1.5">
-            <FileText class="w-4 h-4" /> {{ book.chapter_count }} 章 · {{ (book.file_size / 1024 / 1024).toFixed(2) }} MB ·
-            {{ book.encoding }}
+          <p class="text-xs sm:text-sm text-dim mt-2 flex flex-wrap items-center gap-x-2 gap-y-1">
+            <span class="inline-flex items-center gap-1"><FileText class="w-3.5 h-3.5" /> {{ book.chapter_count }} 章</span>
+            <span>{{ (book.file_size / 1024 / 1024).toFixed(2) }} MB</span>
+            <span>{{ book.encoding }}</span>
           </p>
           <p v-if="book.status === 'warn'" class="text-xs mt-2 flex items-center gap-1" style="color: #c58a2d">
             <AlertTriangle class="w-3.5 h-3.5" /> {{ book.error || '章节识别可能异常' }}
           </p>
-          <div class="mt-5 flex gap-3">
+
+          <!-- 阅读进度 -->
+          <div v-if="readProgress" class="mt-3 max-w-xs">
+            <div class="flex items-center justify-between text-[11px] text-dim mb-1">
+              <span>读至第 {{ readProgress.chapter_index + 1 }} 章</span>
+              <span class="tabular-nums" :title="`本章 ${chapterPercent}%`">全书 {{ progressPercent }}%</span>
+            </div>
+            <div class="h-1.5 rounded-full overflow-hidden" style="background: var(--bg-soft)">
+              <div
+                class="h-full rounded-full"
+                :style="{ width: `${Math.max(2, progressPercent)}%`, background: 'var(--accent)' }"
+              />
+            </div>
+          </div>
+
+          <div class="mt-4 flex gap-3">
             <button class="btn btn-primary" @click="goToReader">
               <PlayCircle class="w-4 h-4" />
-              {{ progress && progress.progress > 0.001 ? '继续阅读' : '开始阅读' }}
+              {{ readProgress ? '继续阅读' : '开始阅读' }}
             </button>
           </div>
         </div>
@@ -246,24 +306,36 @@ async function saveEdit() {
 
       <!-- 目录 -->
       <div class="mt-10">
-        <div class="flex items-center justify-between mb-3">
-          <h3 class="text-sm font-medium text-dim">目录 · {{ chapters.length }} 章</h3>
-          <input v-model="tocQuery" class="input !py-1.5 !text-xs !w-48" placeholder="搜索章节…" />
+        <div class="flex items-center justify-between gap-2 mb-3">
+          <h3 class="text-sm font-medium text-dim shrink-0">
+            目录 · {{ chapters.length }} 章
+            <span v-if="tocQuery.trim()" class="ml-1">({{ tocMatches.length }} 条匹配)</span>
+          </h3>
+          <input v-model="tocQuery" class="input !py-1.5 !text-xs !w-36 sm:!w-48" placeholder="搜索章节…" />
         </div>
-        <ul class="panel rounded-2xl divide-y max-h-[60vh] overflow-y-auto" style="border-color: var(--border)">
+        <ul
+          ref="tocList"
+          class="panel rounded-2xl divide-y max-h-[60vh] overflow-y-auto"
+          style="border-color: var(--border)"
+        >
           <li v-for="c in filteredChapters" :key="c.id">
             <RouterLink
               :to="`/reader/${bookId}/${c.chapter_index}`"
+              :data-current="c.chapter_index === resumeChapterIndex ? 'true' : undefined"
               class="flex items-center gap-3 px-4 py-3 text-sm hover:opacity-75"
             >
               <span class="text-xs text-dim w-12 shrink-0 tabular-nums">{{ c.chapter_index + 1 }}</span>
-              <span class="truncate flex-1" :class="c.chapter_index === resumeTarget().chapterIndex && 'accent font-medium'">
+              <span class="truncate flex-1" :class="c.chapter_index === resumeChapterIndex && 'accent font-medium'">
                 {{ c.title }}
               </span>
-              <BookOpen v-if="c.chapter_index === resumeTarget().chapterIndex" class="w-3.5 h-3.5 accent shrink-0" />
+              <BookOpen v-if="c.chapter_index === resumeChapterIndex" class="w-3.5 h-3.5 accent shrink-0" />
             </RouterLink>
           </li>
         </ul>
+        <div v-if="hasMore" class="text-center mt-3">
+          <button v-if="!tocQuery.trim()" class="btn !text-xs" @click="renderLimit += RENDER_CAP">显示更多</button>
+          <span v-else class="text-xs text-dim">仅显示前 {{ SEARCH_CAP }} 条匹配</span>
+        </div>
       </div>
     </template>
     <div v-else-if="loading" class="text-center text-dim py-20 text-sm">加载中…</div>

@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { listBooks, getBook, getBookChapters, listCategories, deleteBook, countBooks } from '../services/bookService';
+import { listBooks, getBook, getBookChapters, listCategories, deleteBook, countBooks, hasCover, listContinueBooks } from '../services/bookService';
 
 export const bookRoutes = new Hono();
 
@@ -19,12 +19,18 @@ bookRoutes.get('/categories', (c) => {
   return c.json({ categories: listCategories() });
 });
 
+/** GET /api/books/continue?limit=4 —— 最近阅读(有进度的书) */
+bookRoutes.get('/continue', (c) => {
+  const limit = Math.min(20, Math.max(1, Number(c.req.query('limit')) || 4));
+  return c.json({ items: listContinueBooks(limit) });
+});
+
 /** GET /api/books/:id */
 bookRoutes.get('/:id', (c) => {
   const id = Number(c.req.param('id'));
   const book = getBook(id);
   if (!book) return c.json({ error: 'not found' }, 404);
-  return c.json({ book });
+  return c.json({ book: { ...book, hasCover: hasCover(id) } });
 });
 
 /** GET /api/books/:id/chapters */

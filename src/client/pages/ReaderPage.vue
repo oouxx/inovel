@@ -3,12 +3,12 @@ import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router';
 import { api } from '@/api';
 import type { Book, ChapterMeta, ReadingProgress } from '@shared/types';
-import { useSettingsStore } from '@/stores/settings';
+import { useSettingsStore, type ThemeName } from '@/stores/settings';
 import AIPanel from '@/components/AIPanel.vue';
 import ReaderSettingsPanel from '@/components/ReaderSettingsPanel.vue';
 import TocDrawer from '@/components/TocDrawer.vue';
 import {
-  ArrowLeft, ListTree, Sparkles, Settings2, ChevronLeft, ChevronRight, Loader2, Sparkle,
+  ArrowLeft, ListTree, Sparkles, ChevronLeft, ChevronRight, Loader2, Sparkle,
   BookmarkPlus, CheckCircle2,
 } from 'lucide-vue-next';
 
@@ -32,8 +32,10 @@ const uiVisible = ref(true);
 const showSettings = ref(false);
 const showToc = ref(false);
 const showAI = ref(false);
+const aiPanel = ref<InstanceType<typeof AIPanel> | null>(null);
+const selPopup = ref<{ x: number; y: number; term: string; context: string } | null>(null);
 
-// ---------- 分页状态 ----------
+// ---------- 分页 / 位置状态 ----------
 const viewport = ref<HTMLElement | null>(null);
 const contentEl = ref<HTMLElement | null>(null);
 const page = ref(0);
@@ -41,31 +43,205 @@ const pageCount = ref(1);
 const animating = ref(false);
 const viewportH = ref(0);
 const viewportW = ref(0);
+const scrollRatio = ref(0);
 const GAP = 56;
 const pendingProgress = ref<number | null>(null); // 分页完成后要恢复的进度(0~1)
+const targetPage = ref(0);
+const pendingEnd = ref(false); // “去上一章末页”意图
+const CHARS_PER_MINUTE = 400;
+const FONT_MIN = 14;
+const FONT_MAX = 32;
+
+// ---------- 进度拖动 ----------
+const scrubTrack = ref<HTMLElement | null>(null);
+const scrubbing = ref(false);
+const scrubRatio = ref(0);
+const scrubPreview = ref<ScrubLocation | null>(null);
+
+// ---------- 章节预取 ----------
+interface ChapterData {
+  title: string;
+  paragraphs: string[];
+}
+const CACHE_LIMIT = 6;
+const chapterCache = new Map<number, ChapterData>();
+const pendingFetches = new Map<number, Promise<ChapterData>>();
+let loadToken = 0;
 
 let saveTimer: any = null;
 let hideUiTimer: any = null;
+let toastTimer: any = null;
+let selTimer: any = null;
+let suppressTimer: any = null;
 let resizeObserver: ResizeObserver | null = null;
+let suppressClick = false;
+
+// ---------- 工具 ----------
+const clamp = (v: number, min: number, max: number) => Math.min(max, Math.max(min, v));
+const clamp01 = (v: number) => clamp(v, 0, 1);
+
+// ---------- 系统偏好 ----------
+const reducedMotion = ref(false);
+let motionQuery: MediaQueryList | null = null;
+try {
+  motionQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
+  reducedMotion.value = motionQuery.matches;
+} catch {}
+function onMotionPref() {
+  reducedMotion.value = !!motionQuery?.matches;
+}
+
+// ---------- 当前章节 / 进度 ----------
+const currentChapter = computed(() => chapters.value.find((c) => c.chapter_index === chapterIndex.value) || null);
+const nextChapterMeta = computed(
+  () => chapters.value.find((c) => c.chapter_index === chapterIndex.value + 1) || null,
+);
+const chapterRatio = computed(() =>
+  settings.mode === 'paged'
+    ? pageCount.value > 1
+      ? page.value / (pageCount.value - 1)
+      : 0
+    : scrollRatio.value,
+);
+
+/** 按字节偏移计算全书进度(比按章节数更准确) */
+const globalRatio = computed(() => {
+  const c = currentChapter.value;
+  const size = book.value?.file_size ?? 0;
+  const last = chapters.value[chapters.value.length - 1];
+  const atChapterEnd =
+    settings.mode === 'paged' ? pageCount.value <= 1 || chapterRatio.value >= 1 : scrollRatio.value >= 1;
+  if (last && chapterIndex.value >= last.chapter_index && atChapterEnd) return 1;
+  if (c && size > 0) {
+    const span = Math.max(1, c.end_offset - c.start_offset);
+    return clamp01((c.start_offset + chapterRatio.value * span) / size);
+  }
+  return chapters.value.length
+    ? clamp01((chapterIndex.value + chapterRatio.value) / chapters.value.length)
+    : 0;
+});
+const progressPercent = computed(() => Math.round(globalRatio.value * 100));
+const displayRatio = computed(() => (scrubbing.value ? scrubRatio.value : globalRatio.value));
+const displayPercent = computed(() => Math.round(displayRatio.value * 100));
+
+/** 剩余阅读时间:用当前章的「字符数 / 字节数」校准,中文约 400 字/分钟 */
+const chapterChars = computed(() => paragraphs.value.reduce((n, p) => n + p.length, 0));
+const bytesPerChar = computed(() => {
+  const c = currentChapter.value;
+  if (!c) return 3;
+  const byteLen = Math.max(1, c.end_offset - c.start_offset);
+  return chapterChars.value > 0 ? Math.max(0.5, byteLen / chapterChars.value) : 3;
+});
+const absoluteByte = computed(() => {
+  const c = currentChapter.value;
+  if (!c) return 0;
+  return c.start_offset + chapterRatio.value * Math.max(0, c.end_offset - c.start_offset);
+});
+const remainingBookChars = computed(() => {
+  const size = book.value?.file_size ?? 0;
+  if (!size || globalRatio.value >= 1) return 0;
+  return Math.max(0, size - absoluteByte.value) / bytesPerChar.value;
+});
+const remainingChapterMinutes = computed(
+  () => (chapterChars.value * (1 - chapterRatio.value)) / CHARS_PER_MINUTE,
+);
+const remainingBookMinutes = computed(() => remainingBookChars.value / CHARS_PER_MINUTE);
+
+function fmtMinutes(min: number) {
+  if (!Number.isFinite(min) || min <= 0) return '0 分钟';
+  if (min < 1) return '不到 1 分钟';
+  const total = Math.round(min);
+  if (total < 60) return `${total} 分钟`;
+  const h = Math.floor(total / 60);
+  const m = total % 60;
+  return m ? `${h} 小时 ${m} 分` : `${h} 小时`;
+}
+
+const remainingChapterLabel = computed(() => fmtMinutes(remainingChapterMinutes.value));
+const remainingBookLabel = computed(() => fmtMinutes(remainingBookMinutes.value));
+const pageLabel = computed(() =>
+  settings.mode === 'paged'
+    ? `第 ${Math.min(page.value + 1, pageCount.value)} / ${pageCount.value} 页`
+    : `本章 ${Math.round(chapterRatio.value * 100)}%`,
+);
+const remainingLabel = computed(() => `全书 ${progressPercent.value}% · 约剩 ${remainingBookLabel.value}`);
+const chapterTitleShort = computed(() => {
+  const t = title.value;
+  return t.length > 24 ? t.slice(0, 24) + '…' : t;
+});
+const nextChapterTitle = computed(() => {
+  const t = nextChapterMeta.value?.title || '下一章';
+  return t.length > 18 ? t.slice(0, 18) + '…' : t;
+});
+
+// ---------- 章节数据(带相邻章预取) ----------
+function prepareContent(content: string, chapterTitle: string): ChapterData {
+  const lines = content.split('\n').map((l) => l.trim()).filter(Boolean);
+  if (lines.length && (lines[0] === chapterTitle || chapterTitle.includes(lines[0]))) lines.shift();
+  return { title: chapterTitle, paragraphs: lines };
+}
+
+function pruneCache(keep: number) {
+  while (chapterCache.size > CACHE_LIMIT) {
+    let victim: number | null = null;
+    for (const key of chapterCache.keys()) {
+      if (key !== keep && key !== chapterIndex.value) {
+        victim = key;
+        break;
+      }
+    }
+    if (victim == null) break;
+    chapterCache.delete(victim);
+  }
+}
+
+async function getChapterData(index: number): Promise<ChapterData> {
+  const cached = chapterCache.get(index);
+  if (cached) return cached;
+  const pending = pendingFetches.get(index);
+  if (pending) return pending;
+
+  const bid = bookId.value;
+  const meta = chapters.value.find((c) => c.chapter_index === index);
+  const chapterTitle = meta?.title || `第 ${index + 1} 章`;
+  const p = api
+    .getChapterContent(bid, index)
+    .then(({ content }) => {
+      const data = prepareContent(content, chapterTitle);
+      if (bid === bookId.value) {
+        chapterCache.set(index, data);
+        pruneCache(index);
+      }
+      return data;
+    })
+    .finally(() => pendingFetches.delete(index));
+  pendingFetches.set(index, p);
+  return p;
+}
+
+function prefetchChapter(index: number) {
+  if (index < 0 || index >= chapters.value.length || chapterCache.has(index)) return;
+  getChapterData(index).catch(() => {});
+}
 
 // ---------- 加载章节 ----------
 async function loadChapter(resetProgress: boolean) {
+  const token = ++loadToken;
   loading.value = true;
   loadError.value = '';
   try {
     if (!book.value || book.value.id !== bookId.value) {
       book.value = await api.getBook(bookId.value);
     }
-    const meta = chapters.value.find((c) => c.chapter_index === chapterIndex.value);
-    if (!chapters.value.length) chapters.value = await api.getChapters(bookId.value);
-    const m = chapters.value.find((c) => c.chapter_index === chapterIndex.value);
-    const { content } = await api.getChapterContent(bookId.value, chapterIndex.value);
-    title.value = m?.title || `第 ${chapterIndex.value + 1} 章`;
+    if (!chapters.value.length || chapters.value[0]?.book_id !== bookId.value) {
+      chapters.value = await api.getChapters(bookId.value);
+    }
+    if (token !== loadToken) return;
 
-    // 正文段落:去掉与标题重复的首行
-    const lines = content.split('\n').map((l) => l.trim()).filter(Boolean);
-    if (lines.length && (lines[0] === title.value || title.value.includes(lines[0]))) lines.shift();
-    paragraphs.value = lines;
+    const data = await getChapterData(chapterIndex.value);
+    if (token !== loadToken) return;
+    title.value = data.title;
+    paragraphs.value = data.paragraphs;
 
     if (resetProgress) {
       if (pendingEnd.value) {
@@ -95,30 +271,37 @@ async function loadChapter(resetProgress: boolean) {
       }
     }
   } catch (err: any) {
-    loadError.value = err?.message || '加载失败';
+    if (token === loadToken) loadError.value = err?.message || '加载失败';
   } finally {
-    loading.value = false;
+    if (token === loadToken) loading.value = false;
   }
+  if (token !== loadToken) return;
 
   // content 已渲染,现在才能测量分页
   page.value = 0;
+  pageCount.value = 1;
+  scrollRatio.value = 0;
   await nextTick();
   await repaginate();
+
+  const ratio = pendingProgress.value;
   if (settings.mode === 'paged') {
     if (targetPage.value > 0) {
       goToPage(targetPage.value, true);
       targetPage.value = 0;
-    } else if (pendingProgress.value != null) {
-      const idx = Math.round(pendingProgress.value * Math.max(0, pageCount.value - 1));
-      goToPage(idx, true);
+    } else if (ratio != null) {
+      goToPage(Math.round(ratio * Math.max(0, pageCount.value - 1)), true);
       pendingProgress.value = null;
     }
+  } else if (ratio != null) {
+    await setScrollRatio(ratio, true);
+    pendingProgress.value = null;
   }
+
+  prefetchChapter(chapterIndex.value + 1);
+  prefetchChapter(chapterIndex.value - 1);
   scheduleHideUi();
 }
-
-const targetPage = ref(0);
-const pendingEnd = ref(false); // “去上一章末页”意图
 
 // ---------- 分页(CSS columns) ----------
 async function repaginate() {
@@ -147,7 +330,8 @@ const pageGap = computed(() => Math.max(GAP, (viewportW.value || window.innerWid
 
 function goToPage(p: number, instant = false) {
   if (instant) animating.value = false;
-  page.value = Math.min(Math.max(0, p), Math.max(0, pageCount.value - 1));
+  page.value = clamp(Math.round(p), 0, Math.max(0, pageCount.value - 1));
+  selPopup.value = null;
   if (instant) {
     nextTick(() => (animating.value = true));
   }
@@ -155,22 +339,48 @@ function goToPage(p: number, instant = false) {
   scheduleHideUi();
 }
 
+async function setScrollRatio(ratio: number, afterLayout = false) {
+  if (afterLayout) {
+    await nextTick();
+    await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+  }
+  const el = viewport.value;
+  if (!el) return;
+  const max = Math.max(0, el.scrollHeight - el.clientHeight);
+  const top = clamp01(ratio) * max;
+  el.scrollTop = top;
+  scrollRatio.value = max > 0 ? top / max : 0;
+}
+
+async function applyRatio(ratio: number) {
+  const r = clamp01(ratio);
+  if (settings.mode === 'paged') goToPage(Math.round(r * Math.max(0, pageCount.value - 1)), true);
+  else await setScrollRatio(r, true);
+  scheduleSave();
+}
+
 function nextPage() {
   if (settings.mode === 'scroll') {
-    viewport.value?.scrollBy({ top: viewport.value!.clientHeight * 0.9, behavior: 'smooth' });
+    viewport.value?.scrollBy({
+      top: viewport.value!.clientHeight * 0.9,
+      behavior: reducedMotion.value ? 'auto' : 'smooth',
+    });
     scheduleHideUi();
     return;
   }
   if (page.value < pageCount.value - 1) {
     goToPage(page.value + 1);
   } else if (chapterIndex.value + 1 < chapters.value.length) {
-    router.replace(`/reader/${bookId.value}/${chapterIndex.value + 1}`);
+    nextChapter();
   }
 }
 
 function prevPage() {
   if (settings.mode === 'scroll') {
-    viewport.value?.scrollBy({ top: -viewport.value!.clientHeight * 0.9, behavior: 'smooth' });
+    viewport.value?.scrollBy({
+      top: -viewport.value!.clientHeight * 0.9,
+      behavior: reducedMotion.value ? 'auto' : 'smooth',
+    });
     scheduleHideUi();
     return;
   }
@@ -181,34 +391,36 @@ function prevPage() {
   }
 }
 
+function nextChapter() {
+  if (chapterIndex.value + 1 >= chapters.value.length) return;
+  flushSave();
+  router.replace(`/reader/${bookId.value}/${chapterIndex.value + 1}?pos=0`);
+}
+
 async function goPrevChapterEnd() {
+  if (chapterIndex.value <= 0) return;
+  flushSave();
   // 上一章:加载后定位到最后一页
   pendingEnd.value = true;
   await router.replace(`/reader/${bookId.value}/${chapterIndex.value - 1}`);
 }
 
 // ---------- 进度保存 ----------
+function flushSave(forChapter = chapterIndex.value, forBook = bookId.value, ratio = chapterRatio.value) {
+  clearTimeout(saveTimer);
+  if (!forBook || loading.value) return;
+  api
+    .saveProgress(forBook, {
+      chapter_index: forChapter,
+      page: page.value,
+      progress: clamp01(ratio),
+    })
+    .catch(() => {});
+}
+
 function scheduleSave() {
   clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => {
-    if (!book.value) return;
-    let progress = 0;
-    if (settings.mode === 'paged') {
-      progress = pageCount.value > 1 ? page.value / (pageCount.value - 1) : 1;
-    } else {
-      const el = viewport.value;
-      if (!el) return;
-      const max = el.scrollHeight - el.clientHeight;
-      progress = max > 0 ? el.scrollTop / max : 1;
-    }
-    api
-      .saveProgress(bookId.value, {
-        chapter_index: chapterIndex.value,
-        page: page.value,
-        progress: Math.min(1, Math.max(0, progress)),
-      })
-      .catch(() => {});
-  }, 400);
+  saveTimer = setTimeout(() => flushSave(), 400);
 }
 
 // ---------- UI 显隐 ----------
@@ -220,7 +432,7 @@ function scheduleHideUi() {
   clearTimeout(hideUiTimer);
   if (!uiVisible.value) return;
   hideUiTimer = setTimeout(() => {
-    if (!showSettings.value && !showToc.value && !showAI.value) uiVisible.value = false;
+    if (!showSettings.value && !showToc.value && !showAI.value && !scrubbing.value) uiVisible.value = false;
   }, 3500);
 }
 function centerTap() {
@@ -232,11 +444,16 @@ function centerTap() {
 // ---------- 点击分区(左 25% 上一页,右 25% 下一页) ----------
 function onViewportClick(e: MouseEvent) {
   if (loading.value) return;
+  if (suppressClick) {
+    suppressClick = false;
+    return;
+  }
   if (selPopup.value) {
     selPopup.value = null;
     return; // 先收起划词按钮,不误触翻页
   }
-  const el = viewport.value!;
+  const el = viewport.value;
+  if (!el) return;
   const rect = el.getBoundingClientRect();
   const x = e.clientX - rect.left;
   if (x < rect.width * 0.25) prevPage();
@@ -254,15 +471,27 @@ function onTouchEnd(e: TouchEvent) {
   const dx = e.changedTouches[0].clientX - touchStart.x;
   const dy = e.changedTouches[0].clientY - touchStart.y;
   touchStart = null;
+  // 滚动模式交给浏览器原生滚动,避免横向滑动与滚动叠加
+  if (settings.mode !== 'paged') return;
   if (Math.abs(dx) > 60 && Math.abs(dy) < 60) {
+    // 滑动后浏览器仍会补发 click,抑制它避免连翻两页
+    suppressClick = true;
+    clearTimeout(suppressTimer);
+    suppressTimer = setTimeout(() => (suppressClick = false), 400);
     dx < 0 ? nextPage() : prevPage();
   }
 }
 
 // ---------- 键盘 ----------
+const THEME_CYCLE: ThemeName[] = ['auto', 'light', 'sepia', 'gray', 'black'];
+function cycleTheme() {
+  const i = THEME_CYCLE.indexOf(settings.theme);
+  settings.set('theme', THEME_CYCLE[(i + 1) % THEME_CYCLE.length]);
+}
+
 function onKeydown(e: KeyboardEvent) {
-  const tag = (e.target as HTMLElement)?.tagName;
-  if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+  const t = e.target as HTMLElement | null;
+  if (t?.tagName === 'INPUT' || t?.tagName === 'TEXTAREA' || t?.isContentEditable) return;
   switch (e.key) {
     case 'ArrowRight':
     case 'ArrowDown':
@@ -296,6 +525,24 @@ function onKeydown(e: KeyboardEvent) {
     case 'F':
       toggleFullscreen();
       break;
+    case '+':
+    case '=':
+      e.preventDefault();
+      settings.set('fontSize', clamp(settings.fontSize + 1, FONT_MIN, FONT_MAX));
+      break;
+    case '-':
+    case '_':
+      e.preventDefault();
+      settings.set('fontSize', clamp(settings.fontSize - 1, FONT_MIN, FONT_MAX));
+      break;
+    case 'd':
+    case 'D':
+      cycleTheme();
+      break;
+    case 'm':
+    case 'M':
+      settings.set('mode', settings.mode === 'paged' ? 'scroll' : 'paged');
+      break;
   }
 }
 
@@ -307,12 +554,17 @@ function toggleFullscreen() {
 // ---------- 滚动模式进度 ----------
 function onScroll() {
   if (settings.mode !== 'scroll') return;
+  const el = viewport.value;
+  if (el) {
+    const max = Math.max(0, el.scrollHeight - el.clientHeight);
+    scrollRatio.value = max > 0 ? el.scrollTop / max : 0;
+  }
+  selPopup.value = null;
   scheduleSave();
+  scheduleHideUi();
 }
 
 // ---------- 选中文字 → AI ----------
-const selPopup = ref<{ x: number; y: number; term: string; context: string } | null>(null);
-
 function showSelPopup() {
   const sel = window.getSelection();
   const text = sel?.toString().trim() || '';
@@ -342,7 +594,6 @@ function onMouseUp() {
 }
 
 // 移动端:长按选择后 touchend / selectionchange 触发
-let selTimer: any = null;
 function onSelectionChange() {
   clearTimeout(selTimer);
   selTimer = setTimeout(() => {
@@ -362,20 +613,10 @@ async function aiExplain() {
   aiPanel.value?.explainTerm(s.term, s.context);
 }
 
-const aiPanel = ref<InstanceType<typeof AIPanel> | null>(null);
-
 // ---------- 书签 ----------
 const bookmarkToast = ref('');
-let toastTimer: any = null;
 async function addBookmark() {
-  const el = viewport.value;
-  let pos = 0;
-  if (settings.mode === 'paged') {
-    pos = pageCount.value > 1 ? page.value / (pageCount.value - 1) : 1;
-  } else if (el) {
-    const max = el.scrollHeight - el.clientHeight;
-    pos = max > 0 ? el.scrollTop / max : 1;
-  }
+  const pos = clamp01(chapterRatio.value);
   try {
     const r = await api.addBookmark(bookId.value, { chapter_index: chapterIndex.value, position: pos });
     bookmarkToast.value = r.duplicate ? '此位置已有书签' : '已添加书签';
@@ -405,42 +646,205 @@ try {
   mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
   mediaQuery.addEventListener?.('change', applyTheme);
 } catch {}
-onBeforeUnmount(() => mediaQuery?.removeEventListener?.('change', applyTheme));
 
-// ---------- 设置变化 → 重新分页 ----------
+// ---------- 进度条拖动(全书跳转) ----------
+interface ScrubLocation {
+  chapterIndex: number;
+  title: string;
+  ratio: number;
+}
+
+function ratioToLocation(ratio: number): ScrubLocation | null {
+  const r = clamp01(ratio);
+  if (!chapters.value.length) return null;
+  const size = book.value?.file_size ?? 0;
+  if (size > 0) {
+    const target = Math.min(size - 1, r * size);
+    let lo = 0;
+    let hi = chapters.value.length - 1;
+    let idx = chapters.value.length - 1;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (chapters.value[mid].end_offset <= target) lo = mid + 1;
+      else {
+        idx = mid;
+        hi = mid - 1;
+      }
+    }
+    const c = chapters.value[idx];
+    const span = Math.max(1, c.end_offset - c.start_offset);
+    return {
+      chapterIndex: c.chapter_index,
+      title: c.title,
+      ratio: clamp01((target - c.start_offset) / span),
+    };
+  }
+  const count = chapters.value.length;
+  const pos = r * count;
+  const i = Math.min(count - 1, Math.floor(pos));
+  const c = chapters.value[i];
+  return { chapterIndex: c.chapter_index, title: c.title, ratio: clamp01(pos - i) };
+}
+
+function updateScrub(e: PointerEvent) {
+  const el = scrubTrack.value;
+  if (!el) return;
+  const rect = el.getBoundingClientRect();
+  if (rect.width <= 0) return;
+  scrubRatio.value = clamp01((e.clientX - rect.left) / rect.width);
+  scrubPreview.value = ratioToLocation(scrubRatio.value);
+}
+
+function onScrubDown(e: PointerEvent) {
+  if (!scrubTrack.value) return;
+  e.preventDefault();
+  e.stopPropagation();
+  scrubbing.value = true;
+  clearTimeout(hideUiTimer);
+  (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+  updateScrub(e);
+}
+
+function onScrubMove(e: PointerEvent) {
+  if (!scrubbing.value) {
+    if (e.pointerType === 'mouse') updateScrub(e);
+    return;
+  }
+  e.preventDefault();
+  updateScrub(e);
+}
+
+function onScrubUp(e: PointerEvent) {
+  if (!scrubbing.value) return;
+  updateScrub(e);
+  scrubbing.value = false;
+  const loc = scrubPreview.value;
+  scrubPreview.value = null;
+  if (loc) seekTo(loc);
+  scheduleHideUi();
+}
+
+function onScrubCancel() {
+  scrubbing.value = false;
+  scrubPreview.value = null;
+  scheduleHideUi();
+}
+
+function onScrubLeave() {
+  if (!scrubbing.value) scrubPreview.value = null;
+}
+
+function seekTo(loc: ScrubLocation) {
+  if (loc.chapterIndex === chapterIndex.value) {
+    if (settings.mode === 'paged') goToPage(Math.round(loc.ratio * Math.max(0, pageCount.value - 1)), true);
+    else void setScrollRatio(loc.ratio, true);
+    scheduleSave();
+  } else {
+    flushSave();
+    router.push(`/reader/${bookId.value}/${loc.chapterIndex}?pos=${loc.ratio.toFixed(4)}`);
+  }
+}
+
+/** 键盘无障碍:聚焦进度条后 ←/→ 微调 1% */
+function nudgeScrub(delta: number) {
+  const loc = ratioToLocation(clamp01(globalRatio.value + delta / 100));
+  if (loc) seekTo(loc);
+}
+
+// ---------- 路由切换 ----------
+watch([bookId, chapterIndex], ([nBook, nCh], old) => {
+  const [oBook, oCh] = old ?? [nBook, nCh];
+  if (nBook === oBook && nCh === oCh) return;
+  flushSave(oCh, oBook);
+  if (nBook !== oBook) {
+    chapterCache.clear();
+    pendingFetches.clear();
+    book.value = null;
+    chapters.value = [];
+    page.value = 0;
+    pageCount.value = 1;
+    scrollRatio.value = 0;
+  }
+  loadChapter(true);
+});
+
+// 同一章内通过书签/全文搜索带 pos 跳转
 watch(
-  () => [settings.fontSize, settings.lineHeight, settings.width, settings.mode, settings.font],
-  async () => {
+  () => [route.query.pos, route.query.page] as const,
+  async ([posQ, pageQ]) => {
+    if (loading.value) return;
+    if (posQ != null) {
+      const v = Number(posQ);
+      if (!Number.isNaN(v)) await applyRatio(v);
+    } else if (pageQ != null && settings.mode === 'paged') {
+      const v = Number(pageQ);
+      if (!Number.isNaN(v)) goToPage(v, true);
+    }
+  },
+);
+
+// ---------- 设置变化 → 重新分页并保持位置 ----------
+watch(
+  () => [
+    settings.fontSize,
+    settings.lineHeight,
+    settings.width,
+    settings.mode,
+    settings.font,
+    settings.paragraphSpacing,
+    settings.boldText,
+    settings.pageTurn,
+  ] as const,
+  async (_nv, old) => {
+    if (loading.value) return;
+    const prevMode = old?.[3] ?? settings.mode;
+    const ratio =
+      prevMode === 'paged'
+        ? pageCount.value > 1
+          ? page.value / (pageCount.value - 1)
+          : 0
+        : scrollRatio.value;
     await nextTick();
-    const progressRatio =
-      settings.mode === 'paged' && pageCount.value > 1 ? page.value / (pageCount.value - 1) : null;
     await repaginate();
-    if (progressRatio != null && settings.mode === 'paged') {
-      goToPage(Math.round(progressRatio * (pageCount.value - 1)), true);
+    if (settings.mode === 'paged') {
+      goToPage(Math.round(ratio * Math.max(0, pageCount.value - 1)), true);
+    } else {
+      await setScrollRatio(ratio, true);
     }
     scheduleSave();
   },
 );
 
-// ---------- 路由切换 → 重新加载 ----------
-watch(chapterIndex, (n, o) => {
-  if (n !== o) loadChapter(true);
-});
-watch(bookId, () => {
-  book.value = null;
-  chapters.value = [];
-  loadChapter(true);
-});
-
 // ---------- resize ----------
 function setupObserver() {
+  // ResizeObserver 在 observe 时会立即回调一次;跳过首次,避免覆盖刚恢复的阅读位置
+  let lastW = viewport.value?.clientWidth ?? 0;
+  let lastH = viewport.value?.clientHeight ?? 0;
   resizeObserver = new ResizeObserver(async () => {
-    if (settings.mode !== 'paged' || loading.value || !contentEl.value) return;
-    const ratio = pageCount.value > 1 ? page.value / (pageCount.value - 1) : 0;
-    await repaginate();
-    goToPage(Math.round(ratio * (pageCount.value - 1)), true);
+    if (loading.value || !contentEl.value || !viewport.value) return;
+    const w = viewport.value.clientWidth;
+    const h = viewport.value.clientHeight;
+    if (w === lastW && h === lastH) return;
+    lastW = w;
+    lastH = h;
+    if (settings.mode === 'paged') {
+      const ratio = pageCount.value > 1 ? page.value / (pageCount.value - 1) : 0;
+      await repaginate();
+      goToPage(Math.round(ratio * Math.max(0, pageCount.value - 1)), true);
+    } else {
+      const ratio = scrollRatio.value;
+      await setScrollRatio(ratio, true);
+    }
   });
   if (viewport.value) resizeObserver.observe(viewport.value);
+}
+
+// ---------- 生命周期 ----------
+function onVisibilityChange() {
+  if (document.visibilityState === 'hidden') flushSave();
+}
+function onPageHide() {
+  flushSave();
 }
 
 onMounted(() => {
@@ -448,17 +852,29 @@ onMounted(() => {
   window.addEventListener('keydown', onKeydown);
   document.addEventListener('mouseup', onMouseUp);
   document.addEventListener('selectionchange', onSelectionChange);
+  document.addEventListener('visibilitychange', onVisibilityChange);
+  window.addEventListener('pagehide', onPageHide);
+  motionQuery?.addEventListener?.('change', onMotionPref);
   nextTick(setupObserver);
   startHeartbeat();
 });
-onBeforeUnmount(() => clearInterval(heartbeatTimer));
+
 onBeforeUnmount(() => {
+  flushSave();
   window.removeEventListener('keydown', onKeydown);
   document.removeEventListener('mouseup', onMouseUp);
   document.removeEventListener('selectionchange', onSelectionChange);
+  document.removeEventListener('visibilitychange', onVisibilityChange);
+  window.removeEventListener('pagehide', onPageHide);
+  motionQuery?.removeEventListener?.('change', onMotionPref);
+  mediaQuery?.removeEventListener?.('change', applyTheme);
   resizeObserver?.disconnect();
   clearTimeout(saveTimer);
   clearTimeout(hideUiTimer);
+  clearTimeout(toastTimer);
+  clearTimeout(selTimer);
+  clearTimeout(suppressTimer);
+  clearInterval(heartbeatTimer);
 });
 
 // ---------- 样式绑定 ----------
@@ -466,7 +882,9 @@ const contentStyle = computed(() => {
   const base: Record<string, string> = {
     fontSize: `${settings.fontSize}px`,
     lineHeight: String(settings.lineHeight),
+    fontWeight: settings.boldText ? '500' : '400',
     '--reader-font': settings.fontFamily,
+    '--reader-para-gap': `${settings.paragraphSpacing}em`,
   };
   if (settings.mode === 'paged') {
     // 首次测量前给一个安全占位,避免 0 尺寸闪烁
@@ -477,13 +895,18 @@ const contentStyle = computed(() => {
     const gap = Math.max(GAP, w - colW);
     base.height = `${h}px`;
     base.width = `${w}px`;
+    base.paddingTop = 'calc(3.5rem + env(safe-area-inset-top))';
+    base.paddingBottom = 'calc(5rem + env(safe-area-inset-bottom))';
     base.paddingLeft = `${pad}px`;
     base.paddingRight = `${pad}px`;
     base.columnWidth = `${colW}px`;
     base.columnGap = `${gap}px`;
     base.columnFill = 'auto';
     base.transform = `translateX(-${page.value * (colW + gap)}px)`;
-    base.transition = animating.value ? 'transform 0.32s cubic-bezier(0.25, 0.1, 0.25, 1)' : 'none';
+    base.transition =
+      !reducedMotion.value && settings.pageTurn === 'slide' && animating.value
+        ? 'transform 0.32s cubic-bezier(0.25, 0.1, 0.25, 1)'
+        : 'none';
   } else {
     base.maxWidth = `${settings.width}px`;
   }
@@ -496,27 +919,6 @@ const viewportStyle = computed(() => {
     return { overflowY: 'auto', background: bg, WebkitOverflowScrolling: 'touch' } as any;
   }
   return { overflow: 'hidden', background: bg } as any;
-});
-
-const progressPercent = computed(() => {
-  // 章内进度 + 全书章节比例
-  const inChapter = settings.mode === 'paged'
-    ? pageCount.value > 1
-      ? page.value / (pageCount.value - 1)
-      : 1
-    : (() => {
-        const el = viewport.value;
-        if (!el) return 0;
-        const max = el.scrollHeight - el.clientHeight;
-        return max > 0 ? el.scrollTop / max : 0;
-      })();
-  const bookRatio = chapters.value.length ? (chapterIndex.value + inChapter) / chapters.value.length : 0;
-  return Math.min(100, Math.max(0, Math.round(bookRatio * 100)));
-});
-
-const chapterTitleShort = computed(() => {
-  const t = title.value;
-  return t.length > 24 ? t.slice(0, 24) + '…' : t;
 });
 
 // 段落渲染 key
@@ -554,8 +956,15 @@ const paraKey = (i: number) => `p${i}`;
       >
         <h1 class="rtitle">{{ title }}</h1>
         <p v-for="(p, i) in paragraphs" :key="paraKey(i)" class="select-text">{{ p }}</p>
-        <div class="chapter-nav-hint text-center text-sm text-dim select-none" style="text-indent: 0">
-          — {{ chapterIndex + 1 < chapters.length ? '继续下一章' : '已是最后一章' }} —
+        <button
+          v-if="chapterIndex + 1 < chapters.length"
+          class="chapter-nav-hint select-none"
+          @click.stop="nextChapter"
+        >
+          <span class="chapter-nav-hint-title">— 下一章：{{ nextChapterTitle }} —</span>
+        </button>
+        <div v-else class="chapter-nav-hint select-none" style="cursor: default">
+          <span class="chapter-nav-hint-title">— 已是最后一章 —</span>
         </div>
       </div>
     </div>
@@ -587,7 +996,7 @@ const paraKey = (i: number) => `p${i}`;
       <header
         v-if="uiVisible"
         class="absolute top-0 inset-x-0 z-30 flex items-center justify-between px-3 py-2"
-        style="background: color-mix(in srgb, var(--bg) 88%, transparent); backdrop-filter: blur(12px); border-bottom: 1px solid var(--border)"
+        style="background: color-mix(in srgb, var(--bg) 88%, transparent); backdrop-filter: blur(12px); border-bottom: 1px solid var(--border); padding-top: calc(0.5rem + env(safe-area-inset-top))"
         @click.stop
       >
         <div class="flex items-center gap-1 min-w-0">
@@ -609,37 +1018,95 @@ const paraKey = (i: number) => `p${i}`;
           <button class="btn !border-0 !bg-transparent !px-2" title="AI 助手 (A)" @click="showAI = !showAI">
             <Sparkles class="w-5 h-5" :class="showAI && 'accent'" />
           </button>
-          <button class="btn !border-0 !bg-transparent !px-2" title="设置" @click="showSettings = !showSettings">
-            <Settings2 class="w-5 h-5" />
+          <button class="btn !border-0 !bg-transparent !px-2" title="阅读设置 (Aa)" @click="showSettings = !showSettings">
+            <span class="font-semibold leading-none" style="font-family: Georgia, 'Times New Roman', serif; font-size: 15px">Aa</span>
           </button>
         </div>
       </header>
     </Transition>
 
-    <!-- 底栏 -->
+    <!-- 底栏:Apple Books 式进度 + 剩余时间 + 可拖动跳转 -->
     <Transition name="fade">
       <footer
         v-if="uiVisible"
-        class="absolute bottom-0 inset-x-0 z-30 flex items-center justify-between px-4 py-2.5 text-xs text-dim"
-        style="background: color-mix(in srgb, var(--bg) 88%, transparent); backdrop-filter: blur(12px); border-top: 1px solid var(--border)"
+        class="absolute bottom-0 inset-x-0 z-30 px-3 pt-1 pb-2 text-xs text-dim"
+        style="background: color-mix(in srgb, var(--bg) 88%, transparent); backdrop-filter: blur(12px); border-top: 1px solid var(--border); padding-bottom: calc(0.5rem + env(safe-area-inset-bottom))"
         @click.stop
       >
-        <button class="btn !border-0 !bg-transparent !text-xs gap-1" :disabled="chapterIndex === 0" @click="chapterIndex > 0 && goPrevChapterEnd()">
-          <ChevronLeft class="w-3.5 h-3.5" /> 上一章
-        </button>
-        <div class="flex-1 mx-4 flex items-center gap-2">
-          <div class="h-1 flex-1 rounded-full overflow-hidden" style="background: var(--bg-soft)">
-            <div class="h-full rounded-full transition-all" :style="{ width: `${progressPercent}%`, background: 'var(--accent)' }" />
+        <div class="flex items-center gap-1.5">
+          <button
+            class="reader-nav-btn"
+            :disabled="chapterIndex === 0"
+            title="上一章"
+            @click="goPrevChapterEnd"
+          >
+            <ChevronLeft class="w-4 h-4" />
+          </button>
+
+          <div
+            ref="scrubTrack"
+            class="relative flex-1 py-2.5 cursor-pointer touch-none focus:outline-none"
+            role="slider"
+            tabindex="0"
+            aria-label="全书进度"
+            aria-valuemin="0"
+            aria-valuemax="100"
+            :aria-valuenow="displayPercent"
+            @pointerdown="onScrubDown"
+            @pointermove="onScrubMove"
+            @pointerup="onScrubUp"
+            @pointercancel="onScrubCancel"
+            @pointerleave="onScrubLeave"
+            @keydown.left.stop.prevent="nudgeScrub(-1)"
+            @keydown.right.stop.prevent="nudgeScrub(1)"
+          >
+            <div class="relative h-1.5 rounded-full group" style="background: var(--border)">
+              <div
+                class="absolute inset-y-0 left-0 rounded-full"
+                :style="{
+                  width: `${displayPercent}%`,
+                  background: 'var(--accent)',
+                  transition: scrubbing ? 'none' : 'width .2s ease',
+                }"
+              />
+              <div
+                class="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-2.5 h-2.5 rounded-full shadow-sm pointer-events-none transition-opacity"
+                :class="scrubbing ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'"
+                :style="{ left: `${displayPercent}%`, background: 'var(--accent)' }"
+              />
+            </div>
+
+            <!-- 拖动预览 -->
+            <div
+              v-if="scrubPreview"
+              class="absolute bottom-full mb-2 -translate-x-1/2 px-2.5 py-1 rounded-lg text-[11px] whitespace-nowrap shadow-lg pointer-events-none"
+              :style="{
+                left: `${Math.min(90, Math.max(10, scrubRatio * 100))}%`,
+                background: 'var(--panel)',
+                border: '1px solid var(--border)',
+                color: 'var(--text)',
+              }"
+            >
+              <span class="font-medium">第 {{ scrubPreview.chapterIndex + 1 }} 章</span>
+              <span class="text-dim"> · {{ Math.round(scrubPreview.ratio * 100) }}%</span>
+              <div class="text-[10px] text-dim truncate max-w-[180px]">{{ scrubPreview.title }}</div>
+            </div>
           </div>
-          <span class="tabular-nums">{{ progressPercent }}%</span>
+
+          <button
+            class="reader-nav-btn"
+            :disabled="chapterIndex + 1 >= chapters.length"
+            title="下一章"
+            @click="nextChapter"
+          >
+            <ChevronRight class="w-4 h-4" />
+          </button>
         </div>
-        <button
-          class="btn !border-0 !bg-transparent !text-xs gap-1"
-          :disabled="chapterIndex + 1 >= chapters.length"
-          @click="chapterIndex + 1 < chapters.length && router.replace(`/reader/${bookId}/${chapterIndex + 1}`)"
-        >
-          下一章 <ChevronRight class="w-3.5 h-3.5" />
-        </button>
+
+        <div class="flex items-center justify-between gap-3 px-1 tabular-nums">
+          <span class="truncate" :title="`本章约剩 ${remainingChapterLabel}`">{{ pageLabel }}</span>
+          <span class="truncate" :title="`本章约剩 ${remainingChapterLabel}`">{{ remainingLabel }}</span>
+        </div>
       </footer>
     </Transition>
 
@@ -672,7 +1139,51 @@ const paraKey = (i: number) => `p${i}`;
   text-align: justify;
 }
 .chapter-nav-hint {
+  display: block;
+  width: 100%;
   padding: 2em 0 3em;
+  background: none;
+  border: 0;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 0.82em;
+  text-align: center;
+  text-indent: 0;
+  cursor: pointer;
+  transition: color .15s ease;
+}
+.chapter-nav-hint:hover {
+  color: var(--accent);
+}
+.chapter-nav-hint-title {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.reader-content.paged .chapter-nav-hint {
+  break-inside: avoid;
+}
+.reader-nav-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.85rem;
+  height: 1.85rem;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-dim);
+  transition: color .15s ease, background .15s ease;
+}
+.reader-nav-btn:hover {
+  color: var(--accent);
+  background: var(--bg-soft);
+}
+.reader-nav-btn:disabled {
+  opacity: .3;
+  pointer-events: none;
 }
 /* 滚动模式容器内边距 */
 .reader-content:not(.paged) {

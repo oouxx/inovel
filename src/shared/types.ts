@@ -16,6 +16,8 @@ export interface Book {
   /** ok | warn | error */
   status: string;
   error: string | null;
+  /** 是否有自定义封面(仅详情接口返回) */
+  hasCover?: boolean;
   created_at: number;
   updated_at: number;
 }
