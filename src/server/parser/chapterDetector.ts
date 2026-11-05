@@ -2,10 +2,13 @@ import iconv from 'iconv-lite';
 import { decodeBuffer } from './encoding';
 
 /**
- * ChapterDetector —— 独立的章节识别模块
+ * ChapterDetector —— 章节识别
  *
- * 在字节层面按 \n 分行(任何中文编码中 \n/\r 都不会出现在多字节字符内部),
- * 仅对行首片段做快速预筛,命中后再解码整行,计算 confidence。
+ * 设计参考了 Legado/Reader 的「多规则 + 打分选优」思路(独立实现):
+ * 1. 读取文件头 512KB,用一组目录规则分别试匹配
+ * 2. 按有效匹配数量/平均置信度选出最合适的规则
+ * 3. 按块解码全文,在字符串上匹配,再用原始编码回算字节偏移
+ * 4. 处理 BOM、CRLF/CR、UTF-16 行边界、前言、目录页重复条目
  *
  * confidence:
  *   >= 0.9  自动确认
@@ -14,11 +17,11 @@ import { decodeBuffer } from './encoding';
  */
 
 export interface RawCandidate {
-  lineStart: number; // 该行在文件中的字节起点
-  lineEnd: number; // 行尾(含换行)
-  title: string; // 规范化标题
+  lineStart: number;
+  lineEnd: number;
+  title: string;
   confidence: number;
-  number: number | null; // 解析出的章号
+  number: number | null;
 }
 
 export interface DetectedChapter {
@@ -28,6 +31,38 @@ export interface DetectedChapter {
   end_offset: number; // 下一章标题行起点 或 EOF(字节)
   confidence: number;
 }
+
+type NumberKind = 'arabic' | 'chinese' | 'roman';
+
+interface NumberSpec {
+  group: number;
+  kind: NumberKind;
+}
+
+interface TocRule {
+  id: string;
+  name: string;
+  pattern: RegExp;
+  base: number;
+  numbers?: NumberSpec[];
+  titleGroup?: number;
+  markerGroup?: number;
+  /** 数字标题里的「年/月/日/元」等单位词降权 */
+  unitPenalty?: boolean;
+  /** 只在其他规则都失败时才启用 */
+  fallbackOnly?: boolean;
+}
+
+interface Candidate {
+  start: number;
+  title: string;
+  number: number | null;
+  confidence: number;
+}
+
+const SAMPLE_BYTES = 512 * 1024;
+const BLOCK_BYTES = 512 * 1024;
+const MIN_CONFIDENCE = 0.7;
 
 // ---------- 中文数字转换 ----------
 const CN_DIGITS: Record<string, number> = {
@@ -42,7 +77,7 @@ export function chineseToNumber(s: string): number | null {
   if (!s) return null;
   // 支持 十/百/千/万 组合,如 十二、一百二十三、二千零一十
   let total = 0;
-  let section = 0; // 万以下累计
+  let section = 0;
   let current = 0;
   let hasDigit = false;
   for (const ch of s) {
@@ -77,73 +112,6 @@ export function chineseToNumber(s: string): number | null {
   return total + section + current;
 }
 
-// ---------- 匹配规则 ----------
-
-// 第X章 / 第X节 / 第X回 / 第X卷 / 第X篇 / 第X集
-const RE_DI = /^第\s*([0-9零〇一二两三四五六七八九十百千万壹贰叁肆伍陆柒捌玖]+)\s*(章|节|回|卷|篇|集)\s*[:：、\-—\s.]?\s*(.*)$/;
-// Chapter 12 / CHAPTER XII / 第 X 章(英文风格)
-const RE_EN = /^(chapter|chap\.?|section)\s+(\d{1,5}|[ivxlcdm]{1,7})\b\s*[:：.\-—]?\s*(.*)$/i;
-// 001、001. 001、 001 标题
-const RE_NUM = /^(\d{1,5})\s*[、.,．:：\-—]?\s+(.+)$/; // 需要分隔符或空格 + 标题
-const RE_NUM_ONLY = /^(\d{1,5})$/;
-// 特殊章
-const RE_SPECIAL =
-  /^(楔子|序章|序言|序|引子|前言|自序|尾声|终章|终曲|后记|后序|番外|外传|特别篇|最终章|大结局)(\s*[:：.\-—]?\s*.*)?$/;
-// 第X章 的规范化(供输出)
-function normalizeTitle(raw: string): string {
-  return raw.replace(/\s+/g, ' ').trim().slice(0, 120);
-}
-
-function parseLine(line: string): Omit<RawCandidate, 'lineStart' | 'lineEnd'> | null {
-  const trimmed = line.trim();
-  if (!trimmed || trimmed.length > 60) return null; // 标题行不应太长
-
-  let m: RegExpExecArray | null;
-
-  if ((m = RE_DI.exec(trimmed))) {
-    const num = chineseToNumber(m[1]);
-    const hasTitle = (m[3] || '').trim().length > 0;
-    let conf = 0.94;
-    if (hasTitle) conf += 0.04; // 0.98
-    if (/^(章|节|回)$/.test(m[2]) && num !== null) conf += 0.0; // 已含
-    if (m[2] === '卷') conf -= 0.04; // 卷可能是分卷
-    if (/[\u4e00-\u9fff]/.test(m[3] || '') === false && !hasTitle) conf -= 0.02;
-    return { title: normalizeTitle(trimmed), confidence: conf, number: num };
-  }
-
-  if ((m = RE_EN.exec(trimmed))) {
-    const hasTitle = (m[3] || '').trim().length > 0;
-    const num = /^\d+$/.test(m[2]) ? parseInt(m[2], 10) : romanToInt(m[2].toUpperCase());
-    let conf = hasTitle ? 0.93 : 0.9;
-    return { title: normalizeTitle(trimmed), confidence: conf, number: num };
-  }
-
-  if (RE_SPECIAL.test(trimmed)) {
-    return { title: normalizeTitle(trimmed), confidence: 0.92, number: null };
-  }
-
-  if ((m = RE_NUM.exec(trimmed))) {
-    // 001 标题 / 12. 标题 —— 数字 + 分隔 + 标题
-    const titlePart = (m[2] || '').trim();
-    if (!titlePart) return null;
-    // 标题部分若过长或含大量标点,降分
-    let conf = 0.76;
-    if (titlePart.length <= 30 && /[\u4e00-\u9fff]/.test(titlePart)) conf += 0.06;
-    if (/^[、.．]$/.test(m[0].slice(m[1].length, m[1].length + 1).trim())) conf += 0.04;
-    return { title: normalizeTitle(trimmed), confidence: Math.min(conf, 0.88), number: parseInt(m[1], 10) };
-  }
-
-  if ((m = RE_NUM_ONLY.exec(trimmed))) {
-    const num = parseInt(m[1], 10);
-    if (num >= 1 && num <= 99999) {
-      return { title: normalizeTitle(trimmed), confidence: 0.7, number: num };
-    }
-    return null;
-  }
-
-  return null;
-}
-
 function romanToInt(s: string): number | null {
   const map: Record<string, number> = { I: 1, V: 5, X: 10, L: 50, C: 100, D: 500, M: 1000 };
   if (!/^[IVXLCDM]+$/.test(s)) return null;
@@ -156,141 +124,428 @@ function romanToInt(s: string): number | null {
   return total;
 }
 
-// ---------- 快速预筛(字节层面) ----------
-// 常见候选行首字节签名,避免对几十万行逐一 iconv 解码
-function quickMatch(head: Buffer, encoding: string): boolean {
-  if (head.length === 0) return false;
-  const b0 = head[0];
-  // ASCII 开头:数字 / Chapter / 楔子等中文不会出现
-  if (b0 < 0x80) {
-    return (b0 >= 0x30 && b0 <= 0x39) || b0 === 0x63 || b0 === 0x43; // 0-9 / c / C
+// ---------- 目录规则 ----------
+// 允许最多 4 个半角/全角空格或 Tab 作为行首缩进
+const LEAD = '^[ \\t\\u3000]{0,4}';
+const NUM = '[0-9零〇一二两三四五六七八九十百千万壹贰叁肆伍陆柒捌玖拾佰仟]';
+const TITLE_END = '[ \\t\\u3000]*$';
+const SEP = '[ \\t\\u3000]{0,3}(?:[:：、\\-—.．][ \\t\\u3000]{0,3})?';
+
+const RULES: TocRule[] = [
+  {
+    id: 'di',
+    name: '第X章',
+    pattern: new RegExp(
+      `${LEAD}第[ \\t\\u3000]{0,4}(${NUM}{1,12})[ \\t\\u3000]{0,4}` +
+        `(章|节(?![课])|回(?![合来事去])|卷|集(?![合和])|部(?![分赛游])|篇(?![张])|话|幕)` +
+        `${SEP}(.{0,40})${TITLE_END}`,
+      'gm',
+    ),
+    base: 0.94,
+    numbers: [{ group: 1, kind: 'chinese' }],
+    markerGroup: 2,
+    titleGroup: 3,
+  },
+  {
+    id: 'special',
+    name: '特殊章',
+    pattern: new RegExp(
+      `${LEAD}(楔子|序章|序言|序|引子|前言|自序|尾声|终章|终曲|后记|后序|番外(?:篇)?|外传|特别篇|最终章|大结局)` +
+        `(?:${SEP}(.{0,40}))?${TITLE_END}`,
+      'gm',
+    ),
+    base: 0.93,
+    titleGroup: 2,
+  },
+  {
+    id: 'en',
+    name: 'Chapter/Section',
+    pattern: new RegExp(
+      `${LEAD}(chapter|chap\\.?|section|part|episode|book)[ \\t\\u3000]*` +
+        `([0-9]{1,5}|[ivxlcdm]{1,7})\\b[ \\t\\u3000]{0,3}(?:[:：.\\-—][ \\t\\u3000]{0,3})?` +
+        `(.{0,60})${TITLE_END}`,
+      'gim',
+    ),
+    base: 0.93,
+    numbers: [
+      { group: 2, kind: 'arabic' },
+      { group: 2, kind: 'roman' },
+    ],
+    titleGroup: 3,
+  },
+  {
+    id: 'numSep',
+    name: '数字 分隔符 标题',
+    pattern: new RegExp(
+      `${LEAD}([0-9]{1,5})[ \\t\\u3000]*(?:[、.,．:：\\-—_][ \\t\\u3000]*|[ \\t\\u3000]+)(.{1,40})${TITLE_END}`,
+      'gm',
+    ),
+    base: 0.84,
+    numbers: [{ group: 1, kind: 'arabic' }],
+    titleGroup: 2,
+    unitPenalty: true,
+  },
+  {
+    id: 'volChap',
+    name: '卷/章 序号 标题',
+    pattern: new RegExp(
+      `${LEAD}(卷|章)[ \\t\\u3000]{0,4}(${NUM}{1,8})${SEP}(.{0,40})${TITLE_END}`,
+      'gm',
+    ),
+    base: 0.9,
+    numbers: [{ group: 2, kind: 'chinese' }],
+    markerGroup: 1,
+    titleGroup: 3,
+  },
+  {
+    id: 'cnNumSep',
+    name: '中文数字 分隔符 标题',
+    pattern: new RegExp(
+      `${LEAD}(${NUM}{1,8})[、.,．:：\\-—_][ \\t\\u3000]*(.{1,30})${TITLE_END}`,
+      'gm',
+    ),
+    base: 0.78,
+    numbers: [{ group: 1, kind: 'chinese' }],
+    titleGroup: 2,
+  },
+  {
+    id: 'body',
+    name: '正文 标题',
+    pattern: new RegExp(`${LEAD}正文[ \\t\\u3000]{1,4}(.{1,40})${TITLE_END}`, 'gm'),
+    base: 0.82,
+    titleGroup: 1,
+  },
+  {
+    id: 'bracket',
+    name: '括号标题',
+    pattern: new RegExp(
+      `${LEAD}[【\\[〔〖「『〈［(（](?:第[ \\t\\u3000]{0,4}(${NUM}{1,12})[ \\t\\u3000]{0,4}(?:章|节|回|卷)|` +
+        `[Cc]hapter[ \\t\\u3000]*(\\d{1,5}))[^】\\]〕〗」』〉］)）]{0,40}` +
+        `[】\\]〕〗」』〉］)）]${TITLE_END}`,
+      'gm',
+    ),
+    base: 0.86,
+    numbers: [
+      { group: 1, kind: 'chinese' },
+      { group: 2, kind: 'arabic' },
+    ],
+  },
+  {
+    id: 'titleParen',
+    name: '标题(序号)',
+    pattern: new RegExp(
+      `${LEAD}([^\\n]{1,30})[(（](${NUM}{1,8})[)）]${TITLE_END}`,
+      'gm',
+    ),
+    base: 0.78,
+    numbers: [{ group: 2, kind: 'chinese' }],
+  },
+  {
+    id: 'symbol',
+    name: '符号标题',
+    pattern: new RegExp(`${LEAD}[☆★✦✧◆◇■□●○][^\\n]{1,40}${TITLE_END}`, 'gm'),
+    base: 0.72,
+  },
+  {
+    id: 'numOnly',
+    name: '纯数字标题',
+    pattern: new RegExp(`${LEAD}([0-9]{1,5})[.．、]?[ \\t\\u3000]{0,4}$`, 'gm'),
+    base: 0.7,
+    numbers: [{ group: 1, kind: 'arabic' }],
+    fallbackOnly: true,
+  },
+];
+
+// ---------- 匹配与置信度 ----------
+function normalizeTitle(raw: string): string {
+  return raw.replace(/\s+/g, ' ').trim().slice(0, 120);
+}
+
+function parseRuleMatch(rule: TocRule, m: RegExpMatchArray): Omit<Candidate, 'start'> | null {
+  const title = normalizeTitle(m[0] || '');
+  if (!title || title.length > 80) return null;
+
+  let chapterNumber: number | null = null;
+  for (const spec of rule.numbers ?? []) {
+    const raw = m[spec.group];
+    if (!raw) continue;
+    if (spec.kind === 'arabic') {
+      if (/^\d+$/.test(raw)) chapterNumber = parseInt(raw, 10);
+    } else if (spec.kind === 'roman') {
+      chapterNumber = romanToInt(raw.toUpperCase());
+    } else {
+      chapterNumber = chineseToNumber(raw);
+    }
+    if (chapterNumber != null) break;
   }
-  // 非 ASCII:各编码 "第/序/楔/引/尾/终/后/番/外/卷" 首字节不同,直接放行由 parseLine 过滤
-  return true;
+
+  let confidence = rule.base;
+  const titlePart = rule.titleGroup != null ? m[rule.titleGroup] : undefined;
+  if (titlePart !== undefined) {
+    if (titlePart.trim()) confidence += 0.03;
+    else confidence -= 0.03;
+  }
+  if (rule.markerGroup != null && m[rule.markerGroup] === '卷') confidence -= 0.02;
+  if (
+    rule.unitPenalty &&
+    titlePart &&
+    /^(年|月|日|号|元|块|岁|页|字|人|个|次|只|条|张|点|分|秒)(?:\s|$)/.test(titlePart.trim())
+  ) {
+    confidence -= 0.25;
+  }
+  // 标题以句末标点结尾,大概率是正文句子
+  if (/[。!?？]$/.test(title)) confidence -= 0.12;
+
+  return { title, number: chapterNumber, confidence: Math.min(1, Math.max(0.3, confidence)) };
 }
 
-const HEAD_BYTES = 18;
-
-export interface DetectOptions {
-  encoding: string;
-  /** 额外校验:每章最小正文字节数,用于过滤密集误报 */
+function extractCandidates(text: string, rule: TocRule): (Omit<Candidate, 'start'> & { index: number })[] {
+  const re = new RegExp(rule.pattern.source, rule.pattern.flags);
+  const out: (Omit<Candidate, 'start'> & { index: number })[] = [];
+  for (const m of text.matchAll(re)) {
+    const parsed = parseRuleMatch(rule, m);
+    if (parsed) out.push({ ...parsed, index: m.index ?? 0 });
+  }
+  return out;
 }
 
-/**
- * 从 TXT Buffer 中检测章节。
- * 偏移量均为原始文件的字节偏移,阅读时 seek(start) / read(end - start)。
- */
-export function detectChapters(buf: Buffer, encoding: string): { chapters: DetectedChapter[]; bestConfidence: number } {
-  const candidates: RawCandidate[] = [];
-
-  // ---- 逐行扫描(字节层面)----
-  let lineStart = 0;
-  let pos = 0;
-  const n = buf.length;
-  let prevNum: number | null = null;
-
-  const pushCandidate = (ls: number, le: number, line: string) => {
-    const parsed = parseLine(line);
-    if (!parsed) return;
-    // 行首缩进惩罚
-    const lead = line.length - line.trimStart().length;
-    let confidence = parsed.confidence;
-    if (lead > 0) confidence -= 0.12;
-    // 标题行含句末标点(。!?)降分
-    if (/[。!?？!]/.test(parsed.title)) confidence -= 0.25;
-    candidates.push({ lineStart: ls, lineEnd: le, ...parsed, confidence });
+function chooseRule(sample: string): TocRule | null {
+  const scoreRule = (rule: TocRule) => {
+    const list = extractCandidates(sample, rule).filter((c) => c.confidence >= MIN_CONFIDENCE);
+    if (!list.length) return null;
+    return {
+      count: list.length,
+      avg: list.reduce((n, c) => n + c.confidence, 0) / list.length,
+    };
   };
 
-  while (pos <= n) {
-    const nl = buf.indexOf(0x0a, pos);
-    const lineEndWithNl = nl === -1 ? n : nl + 1; // 含 \n
-    const contentEnd = nl === -1 ? n : nl; // 不含 \n(\r 保留在行内,parseLine trim)
-    if (contentEnd >= lineStart) {
-      const head = buf.subarray(lineStart, Math.min(lineStart + HEAD_BYTES, contentEnd));
-      if (quickMatch(head, encoding)) {
-        const raw = buf.subarray(lineStart, contentEnd);
-        const line = decodeLine(raw, encoding);
-        pushCandidate(lineStart, lineEndWithNl, line);
+  let bestRule: TocRule | null = null;
+  let bestCount = 0;
+  let bestAvg = 0;
+
+  for (const rule of RULES) {
+    if (rule.fallbackOnly) continue;
+    const score = scoreRule(rule);
+    if (!score) continue;
+    if (score.count > bestCount || (score.count === bestCount && score.avg > bestAvg + 1e-6)) {
+      bestRule = rule;
+      bestCount = score.count;
+      bestAvg = score.avg;
+    }
+  }
+
+  if (!bestRule) {
+    for (const rule of RULES) {
+      if (!rule.fallbackOnly) continue;
+      const score = scoreRule(rule);
+      if (!score) continue;
+      if (score.count > bestCount || (score.count === bestCount && score.avg > bestAvg + 1e-6)) {
+        bestRule = rule;
+        bestCount = score.count;
+        bestAvg = score.avg;
       }
     }
-    if (nl === -1) break;
-    lineStart = lineEndWithNl;
-    pos = lineEndWithNl;
   }
 
-  if (candidates.length === 0) {
-    return { chapters: [], bestConfidence: 0 };
-  }
-
-  // ---- 后处理:序号连续性验证 ----
-  adjustBySequence(candidates);
-
-  // ---- 置信度过滤 ----
-  const high = candidates.filter((c) => c.confidence >= 0.9);
-  const mid = candidates.filter((c) => c.confidence >= 0.7 && c.confidence < 0.9);
-  let chosen = [...high];
-  // 高置信候选很少时,保留"可能章节"候选(数字序号型书籍)
-  if (high.length < 5) chosen = chosen.concat(mid);
-  else {
-    // 高置信充足时,仅保留与序号序列一致的 mid 候选
-    const highNums = new Set(high.map((c) => c.number).filter((x): x is number => x !== null));
-    chosen = chosen.concat(mid.filter((c) => c.number !== null && highNums.has(c.number)));
-  }
-  chosen.sort((a, b) => a.lineStart - b.lineStart);
-
-  // 去重:同一行只保留一个(已排序,不可能重复;但相邻行连续误报需过滤)
-  // 若相邻候选间隔正文 < 40 字节且前一个 confidence 更低,丢弃低者
-  const deduped: RawCandidate[] = [];
-  for (const c of chosen) {
-    const prev = deduped[deduped.length - 1];
-    if (prev && c.lineStart - prev.lineEnd < 40) {
-      if (c.confidence > prev.confidence) deduped[deduped.length - 1] = c;
-      continue;
-    }
-    deduped.push(c);
-  }
-
-  // ---- 生成章节 ----
-  const chapters: DetectedChapter[] = deduped.map((c, i) => ({
-    chapter_index: i,
-    title: c.title,
-    start_offset: c.lineStart,
-    end_offset: i + 1 < deduped.length ? deduped[i + 1].lineStart : n,
-    confidence: c.confidence,
-  }));
-
-  const bestConfidence = deduped.length ? Math.max(...deduped.map((c) => c.confidence)) : 0;
-  return { chapters, bestConfidence };
+  return bestRule;
 }
 
-/** 解码单行(容错:非法序列替换) */
-function decodeLine(raw: Buffer, encoding: string): string {
+// ---------- 编码相关的行边界 ----------
+function getBomOffset(buf: Buffer, encoding: string): number {
+  if (encoding === 'utf-8-bom' && buf.length >= 3 && buf[0] === 0xef && buf[1] === 0xbb && buf[2] === 0xbf) {
+    return 3;
+  }
+  return 0;
+}
+
+function decodeBlock(buf: Buffer, start: number, end: number, encoding: string): string {
   const enc = encoding === 'utf-8-bom' ? 'utf-8' : encoding;
-  let text = decodeBuffer(raw, enc);
-  if (encoding === 'utf-16le' || encoding === 'utf-16be') return text;
-  // iconv 对不完整序列可能产生 \ufffd,标题中直接替换为空
-  return text.replace(/\ufffd/g, '');
+  return decodeBuffer(buf.subarray(start, end), enc, false);
 }
 
-/** 序号递增检验:递增良好 → 数字型候选加分;混乱 → 减分 */
-function adjustBySequence(candidates: RawCandidate[]) {
-  const withNum = candidates.filter((c) => c.number !== null);
-  if (withNum.length < 3) return;
+/** 找 from 之后第一个换行,返回换行后的位置;找不到返回 null */
+function findLineBreakAfter(buf: Buffer, from: number, encoding: string): number | null {
+  const nl = buf.indexOf(0x0a, from);
+  if (nl !== -1) return nl + 1;
+  const cr = buf.indexOf(0x0d, from);
+  if (cr !== -1) return cr + 1;
+  return null;
+}
+
+/** 从 start 开始取一个尽量接近 BLOCK_BYTES、且落在行边界上的块 */
+function nextBlockEnd(buf: Buffer, start: number, size: number, encoding: string): number {
+  const target = Math.min(buf.length, start + size);
+  if (target >= buf.length) return buf.length;
+  return findLineBreakAfter(buf, target, encoding) ?? buf.length;
+}
+
+/** 字符串在目标编码下占用的字节数 */
+function byteLength(text: string, encoding: string): number {
+  if (!text) return 0;
+  switch (encoding) {
+    case 'gbk':
+      return iconv.encode(text, 'gbk').length;
+    case 'gb18030':
+      return iconv.encode(text, 'gb18030').length;
+    case 'big5':
+      return iconv.encode(text, 'big5').length;
+    default:
+      return Buffer.byteLength(text, 'utf8');
+  }
+}
+
+// ---------- 全文扫描 ----------
+function scanBlocks(buf: Buffer, encoding: string, startOffset: number, rule: TocRule): Candidate[] {
+  const out: Candidate[] = [];
+  let blockStart = startOffset;
+
+  while (blockStart < buf.length) {
+    const blockEnd = nextBlockEnd(buf, blockStart, BLOCK_BYTES, encoding);
+    if (blockEnd <= blockStart) break;
+
+    const text = decodeBlock(buf, blockStart, blockEnd, encoding);
+    const re = new RegExp(rule.pattern.source, rule.pattern.flags);
+    let charCursor = 0;
+    let byteCursor = blockStart;
+
+    for (const m of text.matchAll(re)) {
+      const index = m.index ?? 0;
+      if (index > charCursor) {
+        byteCursor += byteLength(text.slice(charCursor, index), encoding);
+        charCursor = index;
+      }
+      const parsed = parseRuleMatch(rule, m);
+      if (parsed) out.push({ start: byteCursor, ...parsed });
+    }
+
+    blockStart = blockEnd;
+  }
+
+  return out;
+}
+
+// ---------- 后处理 ----------
+function adjustBySequence(candidates: Candidate[]) {
+  const numbered = candidates.filter((c) => c.number !== null && c.number > 0);
+  if (numbered.length < 3) return;
+
   let inc = 0;
   let total = 0;
   let prev = -Infinity;
-  for (const c of withNum) {
+  for (const c of numbered) {
     if (c.number! > prev) inc++;
     else if (c.number! === prev) inc += 0.5;
     total++;
     prev = c.number!;
   }
   const ratio = inc / total;
-  for (const c of candidates) {
-    if (c.number === null) continue;
-    if (ratio >= 0.7) c.confidence = Math.min(1, c.confidence + 0.06);
-    else if (ratio < 0.3) c.confidence = Math.max(0.3, c.confidence - 0.2);
+  for (const c of numbered) {
+    if (ratio >= 0.7) c.confidence = Math.min(1, c.confidence + 0.04);
+    else if (ratio < 0.3) c.confidence = Math.max(0.3, c.confidence - 0.12);
   }
+}
+
+/**
+ * 去掉开头目录页造成的重复条目。
+ * 目录页会先列一遍「第1章…第N章」,正文再出现一遍;仅当第一次出现在文件头部,
+ * 且第二次出现距离较远时,丢弃更早的那条。
+ */
+function dropTocDuplicates(candidates: Candidate[], fileSize: number): Candidate[] {
+  const tocZone = Math.min(512 * 1024, Math.max(16 * 1024, fileSize * 0.2));
+  const groups = new Map<string, Candidate[]>();
+  for (const c of candidates) {
+    if (c.number == null) continue;
+    const key = `n:${c.number}`;
+    const list = groups.get(key);
+    if (list) list.push(c);
+    else groups.set(key, [c]);
+  }
+
+  const indexMap = new Map<Candidate, number>();
+  candidates.forEach((c, i) => indexMap.set(c, i));
+
+  const drop = new Set<Candidate>();
+  for (const list of groups.values()) {
+    if (list.length < 2) continue;
+    list.sort((a, b) => a.start - b.start);
+    const first = list[0];
+    const last = list[list.length - 1];
+    const idx = indexMap.get(first) ?? 0;
+    const prevStart = idx > 0 ? candidates[idx - 1].start : first.start;
+    const nextStart = idx + 1 < candidates.length ? candidates[idx + 1].start : first.start;
+    // 目录页条目通常是一组连续、间距很小的标题;正文里的重复章号不会这么密集
+    const dense = first.start - prevStart < 120 || nextStart - first.start < 120;
+    if (first.start <= tocZone && (dense || last.start - first.start > 500)) drop.add(first);
+  }
+  return candidates.filter((c) => !drop.has(c));
+}
+
+function dedupeSamePosition(candidates: Candidate[]): Candidate[] {
+  const out: Candidate[] = [];
+  for (const c of candidates) {
+    const prev = out[out.length - 1];
+    if (prev && prev.start === c.start) {
+      if (c.confidence > prev.confidence) out[out.length - 1] = c;
+      continue;
+    }
+    out.push(c);
+  }
+  return out;
+}
+
+// ---------- 主入口 ----------
+/**
+ * 从 TXT Buffer 中检测章节。
+ * 偏移量均为原始文件的字节偏移,阅读时 seek(start) / read(end - start)。
+ */
+export function detectChapters(buf: Buffer, encoding: string): { chapters: DetectedChapter[]; bestConfidence: number } {
+  if (!buf.length) return { chapters: [], bestConfidence: 0 };
+
+  // UTF-16 暂不做分章:交给 scanner 的「全文单章」兜底,避免错误字节偏移
+  if (encoding === 'utf-16le' || encoding === 'utf-16be') {
+    return { chapters: [], bestConfidence: 0 };
+  }
+
+  const bomOffset = getBomOffset(buf, encoding);
+  const sampleEnd = nextBlockEnd(buf, bomOffset, SAMPLE_BYTES, encoding);
+  const sample = sampleEnd > bomOffset ? decodeBlock(buf, bomOffset, sampleEnd, encoding) : '';
+  const rule = chooseRule(sample);
+  if (!rule) return { chapters: [], bestConfidence: 0 };
+
+  let candidates = scanBlocks(buf, encoding, bomOffset, rule);
+  if (!candidates.length) return { chapters: [], bestConfidence: 0 };
+
+  candidates.sort((a, b) => a.start - b.start);
+  adjustBySequence(candidates);
+  candidates = candidates.filter((c) => c.confidence >= MIN_CONFIDENCE);
+  candidates = dropTocDuplicates(candidates, buf.length);
+  candidates = dedupeSamePosition(candidates);
+
+  if (!candidates.length) return { chapters: [], bestConfidence: 0 };
+
+  const first = candidates[0];
+  if (first.start > bomOffset) {
+    const preface = decodeBlock(buf, bomOffset, first.start, encoding).trim();
+    if (preface) {
+      candidates.unshift({
+        start: bomOffset,
+        title: '前言',
+        number: null,
+        confidence: 0.5,
+      });
+    }
+  }
+
+  const chapters: DetectedChapter[] = candidates.map((c, i) => ({
+    chapter_index: i,
+    title: c.title,
+    start_offset: c.start,
+    end_offset: i + 1 < candidates.length ? candidates[i + 1].start : buf.length,
+    confidence: c.confidence,
+  }));
+
+  const bestConfidence = chapters.length ? Math.max(...chapters.map((c) => c.confidence)) : 0;
+  return { chapters, bestConfidence };
 }
 
 /** 兜底:无章节时创建单一"全文"章节 */
@@ -307,4 +562,4 @@ export function fallbackSingleChapter(buf: Buffer): DetectedChapter[] {
 }
 
 // 供测试
-export const _internals = { parseLine, chineseToNumber, iconv };
+export const _internals = { RULES, chineseToNumber, iconv, chooseRule, extractCandidates };

@@ -12,7 +12,8 @@
     "ports:free": "bun run scripts/kill-port.ts 8080 5173",
     "scan": "bun run scripts/scan.ts",
     "typecheck:server": "tsc -p tsconfig.server.json --noEmit",
-    "typecheck:client": "vue-tsc -p tsconfig.client.json --noEmit"
+    "typecheck:client": "vue-tsc -p tsconfig.client.json --noEmit",
+    "test:parser": "bun run scripts/test-chapter-parser.ts"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^2.0.8",

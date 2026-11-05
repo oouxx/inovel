@@ -39,10 +39,14 @@ uploadRoutes.post('/', async (c) => {
       upsertBook(dest, 'uploads');
       results.push({
         fileName: safeName,
-        status: info.detected ? 'ok' : 'warn',
+        status: info.detected && !info.weak ? 'ok' : 'warn',
         chapterCount: info.chapters.length,
         encoding: info.encoding,
-        error: info.detected ? undefined : '章节识别异常,按全文单章处理',
+        error: !info.detected
+          ? '章节识别异常,按全文单章处理'
+          : info.weak
+            ? '章节识别置信度较低,建议检查目录'
+            : undefined,
       });
     } catch (err: any) {
       results.push({ fileName: file.name, status: 'error', chapterCount: 0, encoding: '-', error: err?.message || String(err) });

@@ -66,6 +66,7 @@ export function analyzeTxt(filePath: string) {
     encoding,
     chapters: chapters.length ? chapters : fallbackSingleChapter(buf),
     detected: chapters.length > 0,
+    weak: chapters.length > 0 && bestConfidence < 0.75,
     bestConfidence,
     buf,
   };
@@ -79,6 +80,12 @@ export function upsertBook(filePath: string, relativeCategory: string, opts: { r
 
   const info = analyzeTxt(filePath);
   const hash = hashBuffer(info.buf);
+  const status = info.detected && !info.weak ? 'ok' : 'warn';
+  const statusError = !info.detected
+    ? '未识别到章节结构,按全文单章处理'
+    : info.weak
+      ? '章节识别置信度较低,建议检查目录'
+      : null;
 
   const existing = db.query('SELECT id FROM books WHERE file_path = ?').get(filePath) as { id: number } | null;
   let bookId: number;
@@ -90,7 +97,7 @@ export function upsertBook(filePath: string, relativeCategory: string, opts: { r
        chapter_count=?, status=?, error=?, updated_at=? WHERE id=?`,
     ).run(
       title, hash, info.size, Math.floor(statSync(filePath).mtimeMs), info.encoding, relativeCategory,
-      info.chapters.length, info.detected ? 'ok' : 'warn', info.detected ? null : '未识别到章节结构,按全文单章处理',
+      info.chapters.length, status, statusError,
       now, bookId,
     );
     db.query('DELETE FROM chapters WHERE book_id = ?').run(bookId);
@@ -103,7 +110,7 @@ export function upsertBook(filePath: string, relativeCategory: string, opts: { r
       )
       .run(
         title, filePath, hash, info.size, Math.floor(statSync(filePath).mtimeMs), info.encoding, relativeCategory,
-        info.chapters.length, info.detected ? 'ok' : 'warn', info.detected ? null : '未识别到章节结构,按全文单章处理',
+        info.chapters.length, status, statusError,
         now, now,
       );
     bookId = Number(r.lastInsertRowid);

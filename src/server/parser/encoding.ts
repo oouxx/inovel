@@ -14,10 +14,8 @@ const SIMPLIFIED_COMMON =
 // 繁体高频字(Big5 典型)
 const TRADITIONAL_COMMON =
   '的一是了我不人在他有這上們來到時大地為子中你說生國年著就那和要她出也得裡後自以會家可下而過天去能對小多然於心學麼之都好看起發當沒成只如事把還用第樣道想作種開美總從無情己面最女但現前些所同日手又行意動方期它頭經長兒回位分愛老因很給名法間斯知世什兩次使身者被高已親其進此話常與活正感';
-// 日文假名 —— Big5 解码 GBK 文本时极易大量出现
-const KANA = /[\u3040-\u30ff]/g;
 // 常见简体标点,GBK 全角区解码正常,Big5 解码会变成乱符号
-const SIMPLIFIED_PUNCT = /[，。、！？；：""''（）《》……——]/g;
+const SIMPLIFIED_PUNCT = /[，。、！？；：""''（）《》……——]/;
 
 const SIM_SET = new Set(SIMPLIFIED_COMMON.split(''));
 const TRAD_SET = new Set(TRADITIONAL_COMMON.split(''));
