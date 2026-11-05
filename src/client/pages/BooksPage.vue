@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue';
+import { ref, onMounted, computed, watch } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
 import { api } from '@/api';
 import type { Book } from '@shared/types';
 import BookCard from '@/components/BookCard.vue';
@@ -8,12 +9,27 @@ import { Search, X, ArrowDownUp } from 'lucide-vue-next';
 
 type SortKey = 'recent' | 'title' | 'author' | 'chapters';
 
+const route = useRoute();
+const router = useRouter();
 const books = ref<Book[]>([]);
 const categories = ref<{ name: string; count: number }[]>([]);
-const activeCat = ref('');
+const activeCat = ref(typeof route.query.category === 'string' ? route.query.category : '');
 const keyword = ref('');
 const sort = ref<SortKey>('recent');
 const loading = ref(true);
+
+watch(
+  () => route.query.category,
+  (c) => {
+    const v = typeof c === 'string' ? c : '';
+    if (v !== activeCat.value) activeCat.value = v;
+  },
+);
+
+function setCategory(cat: string) {
+  activeCat.value = cat;
+  router.replace({ query: cat ? { category: cat } : {} });
+}
 
 onMounted(async () => {
   try {
@@ -57,6 +73,7 @@ const hasFilter = computed(() => !!activeCat.value || !!keyword.value.trim());
 function resetFilter() {
   activeCat.value = '';
   keyword.value = '';
+  router.replace({ query: {} });
 }
 </script>
 
@@ -94,7 +111,7 @@ function resetFilter() {
     </div>
 
     <div class="flex flex-wrap gap-2 mb-8">
-      <button class="btn !py-1.5 !text-xs" :class="!activeCat && 'btn-primary'" @click="activeCat = ''">
+      <button class="btn !py-1.5 !text-xs" :class="!activeCat && 'btn-primary'" @click="setCategory('')">
         全部 · {{ books.length }}
       </button>
       <button
@@ -102,7 +119,7 @@ function resetFilter() {
         :key="c.name"
         class="btn !py-1.5 !text-xs"
         :class="activeCat === (c.name || '未分类') && 'btn-primary'"
-        @click="activeCat = c.name || '未分类'"
+        @click="setCategory(c.name || '未分类')"
       >
         {{ c.name || '未分类' }} · {{ c.count }}
       </button>

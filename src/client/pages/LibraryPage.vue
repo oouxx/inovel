@@ -36,13 +36,19 @@ onMounted(async () => {
   }
 });
 
-const grouped = computed(() => {
-  const g: Record<string, Book[]> = {};
+const recentBooks = computed(() =>
+  [...books.value].sort((a, b) => (b.created_at || 0) - (a.created_at || 0)).slice(0, 8),
+);
+
+const categorySummary = computed(() => {
+  const counts = new Map<string, number>();
   for (const b of books.value) {
     const key = b.category || '未分类';
-    (g[key] ||= []).push(b);
+    counts.set(key, (counts.get(key) || 0) + 1);
   }
-  return g;
+  return [...counts.entries()]
+    .map(([name, count]) => ({ name, count }))
+    .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name, 'zh-Hans-CN'));
 });
 
 const totalChapters = computed(() => books.value.reduce((n, b) => n + (b.chapter_count || 0), 0));
@@ -122,7 +128,7 @@ const totalChapters = computed(() => books.value.reduce((n, b) => n + (b.chapter
     <section v-if="loading">
       <div class="h-4 w-20 rounded skeleton mb-4" />
       <div class="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-4">
-        <div v-for="i in 12" :key="i">
+        <div v-for="i in 8" :key="i">
           <div class="w-full aspect-[5/7] rounded-lg skeleton" />
           <div class="h-3.5 w-4/5 rounded skeleton mt-2.5" />
           <div class="h-3 w-3/5 rounded skeleton mt-1.5" />
@@ -130,19 +136,37 @@ const totalChapters = computed(() => books.value.reduce((n, b) => n + (b.chapter
       </div>
     </section>
 
-    <!-- 全部小说 -->
-    <section v-else-if="books.length">
-      <h2 class="text-sm font-medium text-dim mb-3">全部小说</h2>
-      <div v-for="(list, cat) in grouped" :key="cat" class="mb-8">
-        <div class="flex items-center gap-2 mb-3">
-          <span class="text-sm font-medium">{{ cat }}</span>
-          <span class="text-xs text-dim">{{ list.length }}</span>
+    <template v-else-if="books.length">
+      <!-- 最近添加 -->
+      <section v-if="recentBooks.length" class="mb-10">
+        <div class="flex items-baseline justify-between mb-3">
+          <h2 class="text-sm font-medium text-dim">最近添加</h2>
+          <RouterLink to="/books" class="text-xs accent hover:opacity-80">查看全部 {{ books.length }} 本 →</RouterLink>
         </div>
         <div class="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-4">
-          <BookCard v-for="b in list" :key="b.id" :book="b" />
+          <BookCard v-for="b in recentBooks" :key="b.id" :book="b" />
         </div>
-      </div>
-    </section>
+      </section>
+
+      <!-- 分类 -->
+      <section v-if="categorySummary.length" class="mb-10">
+        <div class="flex items-baseline justify-between mb-3">
+          <h2 class="text-sm font-medium text-dim">分类</h2>
+          <RouterLink to="/books" class="text-xs text-dim hover:accent">在全部小说中筛选 →</RouterLink>
+        </div>
+        <div class="grid grid-cols-2 sm:grid-cols-3 gap-2">
+          <RouterLink
+            v-for="c in categorySummary"
+            :key="c.name"
+            :to="{ path: '/books', query: { category: c.name } }"
+            class="panel rounded-xl px-4 py-3 flex items-center justify-between gap-3 hover:-translate-y-0.5 hover:shadow-sm transition-all"
+          >
+            <span class="text-sm truncate">{{ c.name }}</span>
+            <span class="text-xs text-dim shrink-0">{{ c.count }} 本</span>
+          </RouterLink>
+        </div>
+      </section>
+    </template>
 
     <!-- 空状态 -->
     <div v-else class="text-center py-24">
