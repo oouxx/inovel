@@ -102,9 +102,15 @@ aiRoutes.post('/chat', async (c) => {
   if (!body?.bookId || body?.chapterIndex === undefined) {
     return c.json({ error: '缺少 bookId / chapterIndex' }, 400);
   }
-  const mode: AIMode = body.mode || 'chat';
+  const mode: AIMode = body.mode === 'explain' ? 'explain' : 'chat';
   const bookId = Number(body.bookId);
   const chapterIndex = Number(body.chapterIndex);
+  if (mode === 'chat' && !String(body.question || '').trim()) {
+    return c.json({ error: '请输入问题' }, 400);
+  }
+  if (mode === 'explain' && !String(body.term || '').trim()) {
+    return c.json({ error: '缺少要解释的文字' }, 400);
+  }
 
   // 校验书籍存在
   const book = getBook(bookId);

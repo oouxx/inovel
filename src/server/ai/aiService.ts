@@ -5,6 +5,7 @@ import { createAnthropic } from '@ai-sdk/anthropic';
 import { createGoogleGenerativeAI as createGoogle } from '@ai-sdk/google';
 import { getDb } from '../database';
 import { readChapterContent } from '../scanner/scanner';
+import { fullTextSearch } from '../services/searchService';
 import { loadAIConfigFile } from './configStore';
 
 /**
@@ -13,8 +14,8 @@ import { loadAIConfigFile } from './configStore';
  * - Vercel AI SDK 多 Provider(OpenAI 兼容 / Anthropic / Google / OpenRouter)
  * - 配置来源:管理页配置(ai-config.json)> 环境变量 > 默认值,支持运行时修改
  * - API Key 只存服务端,绝不进前端
- * - 上下文 = 当前章节 + 前后各 1 章;全书问答走关键词检索(检索 → 相关章节 → AI)
- * - summarize / characters / setting / explain 结果缓存(prompt_hash)
+ * - 上下文 = 当前章节 + 前后各 1 章;问答走关键词检索(检索 → 相关章节 → AI)
+ * - explain 结果缓存(prompt_hash)
  */
 
 export interface AIConfig {
@@ -23,7 +24,7 @@ export interface AIConfig {
   configured: boolean;
 }
 
-export const SUPPORTED_PROVIDERS = ['openai', 'anthropic', 'google', 'openrouter'] as const;
+export const SUPPORTED_PROVIDERS = ['openai', 'anthropic', 'google', 'openrouter', 'opencode'] as const;
 
 /** 合并文件配置与环境变量后的最终生效配置 */
 export interface EffectiveAIConfig {
@@ -41,6 +42,8 @@ function envApiKey(provider: string): string {
       return process.env.GOOGLE_API_KEY || process.env.GOOGLE_GENERATIVE_AI_API_KEY || '';
     case 'openrouter':
       return process.env.OPENROUTER_API_KEY || '';
+    case 'opencode':
+      return process.env.OPENCODE_API_KEY || '';
     default:
       return process.env.OPENAI_API_KEY || '';
   }
@@ -70,6 +73,7 @@ function defaultModel(provider: string): string {
     case 'anthropic': return 'claude-sonnet-4-20250514';
     case 'google': return 'gemini-2.0-flash';
     case 'openrouter': return 'openai/gpt-4o-mini';
+    case 'opencode': return 'deepseek-v4.1-flash';
     default: return 'gpt-4o-mini';
   }
 }
@@ -88,6 +92,14 @@ export function resolveModel(cfg: EffectiveAIConfig): LanguageModel {
         baseURL: baseURL || 'https://openrouter.ai/api/v1',
       });
       return openrouter.chat(cfg.model);
+    }
+    case 'opencode': {
+      // OpenCode Console 提供 OpenAI 兼容端点,文本模型也可走 Chat Completions
+      const opencode = createOpenAI({
+        apiKey: cfg.apiKey || undefined,
+        baseURL: baseURL || 'https://opencode.ai/inference/openai/v1',
+      });
+      return opencode.chat(cfg.model);
     }
     case 'openai':
     default: {
@@ -146,78 +158,77 @@ export async function loadFullContext(bookId: number, chapterIndex: number): Pro
 // ---------- 全书检索 ----------
 
 const STOPWORDS = new Set([
-  '什么', '怎么', '为什么', '为什么', '谁', '哪', '如何', '请问', '一下', '说说', '讲讲',
+  '什么', '怎么', '为什么', '为何', '谁', '哪', '如何', '请问', '一下', '说说', '讲讲',
   '这个', '那个', '本章', '全书', '小说', '人物', '关系', '解释', '介绍', '回顾', '剧情',
   '总结', '之前', '出现', '时候', '哪里', '多少', '突然', '到底', '究竟',
 ]);
 
 const STOP_CHARS = /[，。！？、：；""''（）【】\s,.!?;:()'"[\]a-zA-Z0-9]/;
 
-/** 简单关键词提取:切出 2~6 字中文串,过滤虚词 */
+/** 简单关键词提取:去掉疑问词后切出 2~6 字中文串 */
 export function extractKeywords(q: string): string[] {
   if (!q) return [];
-  const segments = q.split(STOP_CHARS).filter((s) => s.length >= 2);
+  let text = q;
+  for (const w of STOPWORDS) text = text.split(w).join(' ');
+  const segments = text.split(STOP_CHARS).filter((s) => s.length >= 2);
   const kws = new Set<string>();
   for (let seg of segments) {
+    seg = seg.trim();
+    if (seg.length < 2) continue;
     if (seg.length > 6) seg = seg.slice(0, 6);
     if (!STOPWORDS.has(seg)) kws.add(seg);
   }
   return [...kws].slice(0, 5);
 }
 
-/** Search → Relevant chapters → AI:关键词在全书章节中检索,返回最相关的章节片段 */
+/** Search → Relevant chapters → AI:关键词检索全书,只加载命中最高的少量章节 */
 export async function searchBookChapters(
   bookId: number,
   query: string,
   topN = 3,
 ): Promise<{ index: number; title: string; content: string }[]> {
-  const keywords = extractKeywords(query);
+  const keywords = extractKeywords(query).slice(0, 3);
   if (keywords.length === 0) return [];
   const db = getDb();
   const book = db.query('SELECT * FROM books WHERE id = ?').get(bookId) as any;
   if (!book) return [];
   const chapters = db
-    .query('SELECT chapter_index, title, start_offset, end_offset FROM chapters WHERE book_id = ? ORDER BY chapter_index')
-    .all(bookId) as any[];
+    .query(
+      'SELECT chapter_index, title, start_offset, end_offset FROM chapters WHERE book_id = ? ORDER BY chapter_index',
+    )
+    .all(bookId) as { chapter_index: number; title: string; start_offset: number; end_offset: number }[];
+  if (!chapters.length) return [];
 
-  const scored: { index: number; title: string; content: string; score: number }[] = [];
-  for (const meta of chapters) {
-    let score = 0;
-    for (const kw of keywords) {
-      if ((meta.title || '').includes(kw)) score += 3; // 标题命中权重更高
+  const byIndex = new Map(chapters.map((c) => [c.chapter_index, c]));
+  const scores = new Map<number, number>();
+  const add = (index: number, score: number) => scores.set(index, (scores.get(index) || 0) + score);
+
+  for (const kw of keywords) {
+    for (const c of chapters) {
+      if ((c.title || '').includes(kw)) add(c.chapter_index, 3);
     }
-    if (score === 0) {
-      const content = await readChapterContent(book.file_path, book.encoding, meta.start_offset, meta.end_offset);
-      let hits = 0;
-      let firstPos = -1;
-      for (const kw of keywords) {
-        const pos = content.indexOf(kw);
-        if (pos >= 0) {
-          hits++;
-          if (firstPos < 0) firstPos = pos;
-        }
-      }
-      if (hits > 0) {
-        const snippet = content.slice(Math.max(0, firstPos - 200), firstPos + 1500);
-        scored.push({
-          index: meta.chapter_index,
-          title: meta.title || `第 ${meta.chapter_index + 1} 章`,
-          content: trimMiddle(snippet, 3000),
-          score: hits,
-        });
-      }
-    } else {
-      const content = await readChapterContent(book.file_path, book.encoding, meta.start_offset, meta.end_offset);
-      scored.push({
-        index: meta.chapter_index,
-        title: meta.title || `第 ${meta.chapter_index + 1} 章`,
-        content: trimMiddle(content, 6000),
-        score,
-      });
+    try {
+      // 整文件字节搜索,避免逐章解码;只取每章命中次数做排序
+      const result = fullTextSearch(bookId, kw, 40);
+      for (const hit of result.chapters) add(hit.chapter_index, Math.min(10, Math.max(1, hit.count)));
+    } catch {
+      // 单个关键词检索失败不影响其他关键词
     }
   }
-  scored.sort((a, b) => b.score - a.score || a.index - b.index);
-  return scored.slice(0, topN).map(({ index, title, content }) => ({ index, title, content }));
+
+  const ranked = [...scores.entries()].sort((a, b) => b[1] - a[1]).slice(0, Math.max(topN * 3, topN));
+  const out: { index: number; title: string; content: string }[] = [];
+  for (const [index] of ranked) {
+    const meta = byIndex.get(index);
+    if (!meta) continue;
+    const content = await readChapterContent(book.file_path, book.encoding, meta.start_offset, meta.end_offset);
+    out.push({
+      index,
+      title: meta.title || `第 ${index + 1} 章`,
+      content: trimMiddle(content, 6000),
+    });
+  }
+  return out.slice(0, topN);
 }
 
 // ---------- Prompt 构建 ----------
@@ -254,62 +265,28 @@ export async function buildPrompt(req: {
   if (ctx.next) parts.push(`【下一章(索引 ${cur.index + 1})】\n${ctx.next}`);
   const contextText = parts.join('\n\n');
 
-  switch (req.mode) {
-    case 'summarize':
-      return {
-        cacheable: true,
-        system: SYSTEM_PROMPT,
-        user: `请总结下面这一章的内容,按以下结构输出:\n\n## 剧情概述\n(2-3 句)\n\n## 关键事件\n(列表,3-5 条)\n\n## 人物变化\n(本章人物的状态/关系/立场变化)\n\n## 重要伏笔\n(值得注意的细节、悬念;没有则写"无明显伏笔")\n\n---\n\n${contextText}`,
-      };
-    case 'characters':
-      return {
-        cacheable: true,
-        system: SYSTEM_PROMPT,
-        user: `请分析下面这一章中出现的人物及其关系:\n\n## 出场人物\n(列出人物及其身份)\n\n## 人物关系\n(人物之间的关系:冲突/合作/亲缘等)\n\n## 本章动态\n(本章中人物的态度或关系变化)\n\n---\n\n${contextText}`,
-      };
-    case 'setting':
-      return {
-        cacheable: true,
-        system: SYSTEM_PROMPT,
-        user: `请解释下面章节中出现的设定、专有名词与世界观(功法、境界、组织、地理、物品等),以列表说明:\n\n## 设定与名词\n- **名称**:解释(若原文信息不足,请说明)\n\n---\n\n${contextText}`,
-      };
-    case 'explain': {
-      const term = req.term || '';
-      const around = req.context ? `\n\n【选中词所在段落】\n${req.context}` : '';
-      return {
-        cacheable: true,
-        system: SYSTEM_PROMPT,
-        user: `读者在阅读《${book.title}》时选中了词句:「${term}」。请结合上下文解释它在小说中的含义(可能是人名、地名、功法、组织、古语或专有名词等)。先用一句话给出最可能的解释,再补充相关背景;若上下文不足以判断,请说明。\n\n【阅读上下文】\n${contextText}${around}`,
-      };
-    }
-    case 'recap': {
-      const question = req.question || '请回顾之前的剧情';
-      const retrieved = await searchBookChapters(req.bookId, question, 4);
-      const retrievedText = retrieved.length
-        ? retrieved.map((r) => `--- 第 ${r.index + 1} 章《${r.title}》 ---\n${r.content}`).join('\n\n')
-        : '(全书检索无相关内容)';
-      return {
-        cacheable: false,
-        system: SYSTEM_PROMPT,
-        user: `读者正在阅读,想回顾相关剧情:「${question}」。\n下面是全书关键词检索结果与当前阅读上下文,请梳理这条剧情线:何时发生、涉及哪些人物、结果如何,并说明它与当前情节的联系。\n\n【全书检索结果】\n${retrievedText}\n\n【当前阅读上下文】\n${contextText}`,
-      };
-    }
-    case 'chat':
-    default: {
-      const question = req.question || '';
-      const retrieved = await searchBookChapters(req.bookId, question, 3);
-      const retrievedText = retrieved.length
-        ? retrieved
-            .map((r) => `--- 检索命中 · 第 ${r.index + 1} 章《${r.title}》 ---\n${r.content}`)
-            .join('\n\n')
-        : '(全书检索无相关命中)';
-      return {
-        cacheable: false,
-        system: SYSTEM_PROMPT,
-        user: `【问题】${question}\n\n【当前阅读上下文】\n${contextText}\n\n【全书相关章节检索结果】\n${retrievedText}\n\n请结合上下文与检索结果回答问题。`,
-      };
-    }
+  if (req.mode === 'explain') {
+    const term = req.term || '';
+    const around = req.context ? `\n\n【选中词所在段落】\n${req.context}` : '';
+    return {
+      cacheable: true,
+      system: SYSTEM_PROMPT,
+      user: `读者在阅读《${book.title}》时选中了词句:「${term}」。请结合上下文解释它在小说中的含义(可能是人名、地名、功法、组织、古语或专有名词等)。先用一句话给出最可能的解释,再补充相关背景;若上下文不足以判断,请说明。\n\n【阅读上下文】\n${contextText}${around}`,
+    };
   }
+
+  const question = req.question || '';
+  const retrieved = await searchBookChapters(req.bookId, question, 3);
+  const retrievedText = retrieved.length
+    ? retrieved
+        .map((r) => `--- 检索命中 · 第 ${r.index + 1} 章《${r.title}》 ---\n${r.content}`)
+        .join('\n\n')
+    : '(全书检索无相关命中)';
+  return {
+    cacheable: false,
+    system: SYSTEM_PROMPT,
+    user: `【问题】${question}\n\n【当前阅读上下文】\n${contextText}\n\n【全书相关章节检索结果】\n${retrievedText}\n\n请结合上下文与检索结果回答问题。`,
+  };
 }
 
 // ---------- 缓存 ----------

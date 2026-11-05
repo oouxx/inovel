@@ -90,12 +90,13 @@ await page.waitForTimeout(300);
 await page.keyboard.press('a');
 await page.waitForTimeout(500);
 ok('AI 面板打开(A)', await page.locator('.ai-panel').isVisible());
-await page.locator('.ai-panel button:has-text("总结本章")').click();
-await page.waitForTimeout(1200);
+await page.fill('.ai-panel textarea', '这本书讲了什么?');
+await page.locator('.ai-panel form button[type=submit]').click();
+await page.waitForTimeout(1500);
 const aiMsg = await page.locator('.ai-panel').textContent();
-// 未配置 → 提示;已配置(mock/真实)→ 正常总结输出
-const aiOk = aiMsg?.includes('未配置') || aiMsg?.includes('剧情概述') || false;
-ok('AI 面板响应正常(提示或总结)', aiOk);
+// 未配置 → 提示;已配置(mock/真实)→ 正常回答
+const aiOk = aiMsg?.includes('未配置') || aiMsg?.includes('mock测试响应') || aiMsg?.includes('剧情概述') || false;
+ok('AI 面板响应正常(提示或回答)', aiOk);
 await page.keyboard.press('Escape'); // 关闭 AI 面板
 await page.waitForTimeout(400);
 

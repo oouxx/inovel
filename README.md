@@ -37,12 +37,12 @@
 - **无障碍**:尊重系统「减弱动态效果」,翻页/过渡动画自动降级
 
 ### AI 阅读助手
-- 基于 **Vercel AI SDK**,支持 `openai / anthropic / google / openrouter / 兼容端点`
-- **总结本章 / 人物关系 / 解释设定 / 回顾剧情** 一键操作
-- **自由问答**:问题关键词 → 全书章节检索 → 相关片段作为上下文
+- 基于 **Vercel AI SDK**,支持 `openai / anthropic / google / openrouter / OpenCode Console / 兼容端点`
+- **自由问答**:问题关键词 → 全书检索 → 相关章节作为上下文,无预设问题
 - **划词解释**:选中文字 → AI 解释,带上下文(桌面 mouseup / 移动端长按)
+- **打字机输出**:SSE 流式 + 逐字显示 + 复制回答
 - **对话历史**:按书持久化,跨章节保留
-- **SSE 流式输出**、结果缓存(`prompt_hash`)、API Key 只存服务端
+- **SSE 流式输出**、解释结果缓存(`prompt_hash`)、API Key 只存服务端
 
 ## 🚀 快速开始
 
@@ -89,13 +89,14 @@ docker run -d \
 | `PORT` | `8080` | 服务端口 |
 | `NOVELS_DIR` | `./data/novels`(Docker: `/data/novels`) | 小说 TXT 目录 |
 | `DATA_DIR` | `./data`(Docker: `/data/app`) | SQLite 数据目录 |
-| `AI_PROVIDER` | `openai` | `openai` / `anthropic` / `google` / `openrouter` |
+| `AI_PROVIDER` | `openai` | `openai` / `anthropic` / `google` / `openrouter` / `opencode` |
 | `AI_MODEL` | 按 provider 默认 | 模型名 |
 | `OPENAI_API_KEY` | - | OpenAI 或兼容端点 Key |
 | `AI_BASE_URL` | - | OpenAI 兼容端点(通义/DeepSeek/Ollama 等) |
 | `ANTHROPIC_API_KEY` | - | Anthropic |
 | `GOOGLE_API_KEY` | - | Google Gemini |
 | `OPENROUTER_API_KEY` | - | OpenRouter |
+| `OPENCODE_API_KEY` | - | OpenCode Console(默认端点 `https://opencode.ai/inference/openai/v1`) |
 
 未配置 AI 时,阅读器一切功能可用,AI 面板会显示配置提示。
 

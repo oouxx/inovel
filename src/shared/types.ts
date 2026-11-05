@@ -74,7 +74,7 @@ export interface SearchResultItem {
 
 // ---------- AI ----------
 
-export type AIMode = 'chat' | 'summarize' | 'explain' | 'characters' | 'setting' | 'recap';
+export type AIMode = 'chat' | 'explain';
 
 export interface AIChatRequest {
   mode: AIMode;

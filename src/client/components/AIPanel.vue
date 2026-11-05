@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, watch, nextTick, computed, onMounted, onUnmounted, defineAsyncComponent } from 'vue';
-import { Sparkles, X, Send, Loader2, FileQuestion, Users, BookMarked, History, Trash2 } from 'lucide-vue-next';
+import { Sparkles, X, Send, Trash2, Copy, Check } from 'lucide-vue-next';
 import { streamAI } from '@/utils/ai';
 
 // markstream-vue 较重(约 750KB/92KB CSS),面板首次打开时才异步加载,不进阅读页主包
@@ -31,7 +31,10 @@ const messages = ref<Msg[]>([]);
 const input = ref('');
 const busy = ref(false);
 const scrollEl = ref<HTMLElement | null>(null);
+const inputEl = ref<HTMLTextAreaElement | null>(null);
+const copiedIndex = ref(-1);
 let abort: AbortController | null = null;
+let copyTimer: any = null;
 
 // ---- 对话历史(按书持久化到 localStorage,上限 60 条) ----
 const historyKey = computed(() => `ai-chat-${props.bookId}`);
@@ -55,6 +58,7 @@ function saveHistory() {
 }
 
 function clearHistory() {
+  if (messages.value.length && !confirm('清空当前书籍的 AI 对话?')) return;
   abort?.abort();
   busy.value = false;
   messages.value = [];
@@ -72,13 +76,6 @@ watch(
     if (!messages.value.some((m) => m.streaming)) saveHistory();
   },
 );
-
-const quickActions = [
-  { mode: 'summarize', label: '总结本章', icon: FileQuestion },
-  { mode: 'characters', label: '人物关系', icon: Users },
-  { mode: 'setting', label: '解释设定', icon: BookMarked },
-  { mode: 'recap', label: '回顾剧情', icon: History },
-];
 
 // ---- 流式渲染(markstream-vue)----
 // 渐进式渲染 / 打字机 / 平滑节奏 / 不完整语法容错均由库内部处理,
@@ -102,11 +99,10 @@ function followScroll() {
   if (stick) scrollBottom();
 }
 
-async function run(mode: string, extra: { question?: string; term?: string; context?: string } = {}) {
+async function run(mode: 'chat' | 'explain', extra: { question?: string; term?: string; context?: string } = {}) {
   if (busy.value) return;
   busy.value = true;
-  const userContent =
-    mode === 'chat' ? extra.question! : mode === 'explain' ? `解释「${extra.term}」` : labelOf(mode);
+  const userContent = mode === 'explain' ? `解释「${extra.term}」` : extra.question || '';
   messages.value.push({ role: 'user', content: userContent });
   const msg: Msg = { role: 'assistant', content: '', streaming: true };
   messages.value.push(msg);
@@ -142,17 +138,49 @@ async function run(mode: string, extra: { question?: string; term?: string; cont
     busy.value = false;
   }
   scrollBottom();
+  nextTick(() => inputEl.value?.focus());
 }
 
-function labelOf(mode: string): string {
-  return quickActions.find((a) => a.mode === mode)?.label || '请分析';
+function onEnter(e: KeyboardEvent) {
+  // 中文输入法候选框里的 Enter 不发送
+  if (e.isComposing || e.keyCode === 229) return;
+  e.preventDefault();
+  send();
+}
+
+function onEscape(e: KeyboardEvent) {
+  if (e.isComposing) return;
+  e.preventDefault();
+  emit('close');
 }
 
 function send() {
   const q = input.value.trim();
   if (!q || busy.value) return;
   input.value = '';
+  nextTick(() => {
+    autoResize();
+    inputEl.value?.focus();
+  });
   run('chat', { question: q });
+}
+
+function autoResize() {
+  const el = inputEl.value;
+  if (!el) return;
+  el.style.height = 'auto';
+  el.style.height = `${Math.min(el.scrollHeight, 120)}px`;
+}
+
+async function copyMessage(index: number, content: string) {
+  try {
+    await navigator.clipboard.writeText(content);
+    copiedIndex.value = index;
+    clearTimeout(copyTimer);
+    copyTimer = setTimeout(() => {
+      if (copiedIndex.value === index) copiedIndex.value = -1;
+    }, 1600);
+  } catch {}
 }
 
 function stop() {
@@ -201,9 +229,20 @@ onMounted(() => {
   window.visualViewport?.addEventListener('resize', syncKeyboard);
   window.visualViewport?.addEventListener('scroll', syncKeyboard);
 });
+
+watch(
+  () => props.open,
+  async (open) => {
+    if (!open) return;
+    await nextTick();
+    autoResize();
+    inputEl.value?.focus();
+  },
+);
 onUnmounted(() => {
   window.visualViewport?.removeEventListener('resize', syncKeyboard);
   window.visualViewport?.removeEventListener('scroll', syncKeyboard);
+  clearTimeout(copyTimer);
 });
 
 const hasMessages = computed(() => messages.value.length > 0);
@@ -222,7 +261,7 @@ const hasMessages = computed(() => messages.value.length > 0);
         <div class="flex items-center gap-2">
           <Sparkles class="w-4 h-4 accent" />
           <span class="text-sm font-medium">AI 阅读助手</span>
-          <span class="text-[10px] text-dim">《{{ bookTitle }}》</span>
+          <span class="text-[10px] text-dim truncate">《{{ bookTitle }}》 · 第 {{ chapterIndex + 1 }} 章</span>
         </div>
         <div class="flex items-center">
           <button
@@ -237,26 +276,12 @@ const hasMessages = computed(() => messages.value.length > 0);
         </div>
       </div>
 
-      <!-- 快捷操作 -->
-      <div class="px-4 py-2.5 border-b flex gap-2 overflow-x-auto shrink-0" style="border-color: var(--border)">
-        <button
-          v-for="a in quickActions"
-          :key="a.mode"
-          class="btn !py-1.5 !px-2.5 !text-xs shrink-0"
-          :disabled="busy"
-          @click="run(a.mode)"
-        >
-          <component :is="a.icon" class="w-3.5 h-3.5" />
-          {{ a.label }}
-        </button>
-      </div>
-
       <!-- 消息 -->
       <div ref="scrollEl" class="flex-1 overflow-y-auto px-4 py-4 space-y-4">
         <div v-if="!hasMessages" class="text-center text-xs text-dim py-10">
           <Sparkles class="w-6 h-6 mx-auto mb-3 opacity-50" />
-          试试上方的快捷操作,或直接提问<br />
-          例如:「为什么萧炎突然突破?」
+          可以问关于这本书的任何问题
+          <div class="mt-1.5 opacity-80">AI 会结合当前章节与全书相关内容回答</div>
         </div>
         <template v-for="(m, i) in messages" :key="i">
           <div v-if="m.role === 'user'" class="flex justify-end">
@@ -273,12 +298,27 @@ const hasMessages = computed(() => messages.value.length > 0);
                 mode="chat"
                 :content="m.content"
                 :final="!m.streaming"
-                typewriter="simple"
+                typewriter="precise"
                 smooth-streaming="auto"
                 :fade="false"
                 :render-code-blocks-as-pre="true"
+                :max-live-nodes="0"
+                :batch-rendering="true"
+                :render-batch-size="12"
+                :render-batch-delay="8"
+                :render-batch-budget-ms="4"
               />
               <span v-else-if="m.streaming" class="text-xs text-dim">正在分析…</span>
+              <button
+                v-if="m.content && !m.streaming"
+                class="mt-1.5 inline-flex items-center gap-1 text-[10px] text-dim hover:accent"
+                title="复制回答"
+                @click="copyMessage(i, m.content)"
+              >
+                <Check v-if="copiedIndex === i" class="w-3 h-3" />
+                <Copy v-else class="w-3 h-3" />
+                {{ copiedIndex === i ? '已复制' : '复制' }}
+              </button>
             </div>
           </div>
         </template>
@@ -286,14 +326,25 @@ const hasMessages = computed(() => messages.value.length > 0);
 
       <!-- 输入 -->
       <div class="p-3 border-t shrink-0" style="border-color: var(--border)">
-        <form class="flex gap-2" @submit.prevent="send()">
-          <input v-model="input" class="input !py-2 text-sm" placeholder="请输入问题……" :disabled="busy" />
-          <button v-if="busy" type="button" class="btn btn-primary" @click="stop">停止</button>
-          <button v-else type="submit" class="btn btn-primary" :disabled="!input.trim()">
+        <form class="flex items-end gap-2" @submit.prevent="send()">
+          <textarea
+            ref="inputEl"
+            v-model="input"
+            rows="1"
+            class="input !py-2 text-sm resize-none flex-1 max-h-[7.5rem]"
+            placeholder="问关于这本书的任何问题…"
+            :disabled="busy"
+            aria-label="向 AI 提问"
+            @input="autoResize"
+            @keydown.enter.exact="onEnter"
+            @keydown.esc="onEscape"
+          />
+          <button v-if="busy" type="button" class="btn btn-primary shrink-0" @click="stop">停止</button>
+          <button v-else type="submit" class="btn btn-primary shrink-0" :disabled="!input.trim()">
             <Send class="w-4 h-4" />
           </button>
         </form>
-        <p class="text-[10px] text-dim mt-1.5 text-center">AI 回答基于当前章节与上下文,仅供参考</p>
+        <p class="text-[10px] text-dim mt-1.5 text-center">Enter 发送,Shift+Enter 换行 · 回答仅供参考</p>
       </div>
     </aside>
   </Transition>

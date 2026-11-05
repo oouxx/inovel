@@ -28,7 +28,7 @@ export interface FullTextResult {
 }
 
 function normalizeEnc(e: string): string {
-  if (!e || e === 'unknown') return 'utf-8';
+  if (!e || e === 'unknown' || e === 'utf-8-bom') return 'utf-8';
   return e;
 }
 

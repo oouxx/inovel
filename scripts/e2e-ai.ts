@@ -23,39 +23,25 @@ await page.waitForTimeout(1200);
 await page.keyboard.press('a');
 await page.waitForTimeout(500);
 
-// 点击"总结本章"
-await page.locator('.ai-panel button:has-text("总结本章")').click();
+// 自由提问(Enter 发送),验证 SSE 流式输出
+await page.fill('.ai-panel textarea', '萧炎为什么能突破?');
+await page.keyboard.press('Enter');
 await page.waitForTimeout(300);
-const streamingText = await page.locator('.ai-panel .md-body').textContent().catch(() => '');
+const streamingText = await page.locator('.ai-panel .md-stream').textContent().catch(() => '');
 ok('流式输出进行中', !!streamingText && streamingText.length > 0, `len=${streamingText?.length}`);
 
-// 等待完成
+// 等待完成(输入框恢复可用)
 await page.waitForFunction(
   () => {
-    const btns = [...document.querySelectorAll('.ai-panel button')];
-    return btns.some((b) => b.textContent?.includes('发送')) || !!document.querySelector('.ai-panel input:not(:disabled)');
+    const ta = document.querySelector('.ai-panel textarea') as HTMLTextAreaElement | null;
+    return !!ta && !ta.disabled;
   },
   { timeout: 15000 },
 );
 await page.waitForTimeout(400);
 
-const finalText = await page.locator('.ai-panel .md-body').last().textContent();
-ok('总结完整输出', finalText!.includes('剧情概述') && finalText!.includes('mock测试响应'), `${finalText?.length} chars`);
-
-// 再次点击 → 应命中缓存(meta cached=true;输出相同)
-await page.locator('.ai-panel button:has-text("总结本章")').click();
-await page.waitForTimeout(100);
-const cachedEarly = await page.locator('.ai-panel .md-body').last().textContent();
-await page.waitForTimeout(1500);
-const cachedFinal = await page.locator('.ai-panel .md-body').last().textContent();
-ok('缓存命中重放', cachedFinal === finalText, `${cachedFinal?.length} chars`);
-
-// 自由提问
-await page.fill('.ai-panel input.input', '萧炎为什么能突破?');
-await page.locator('.ai-panel form button[type=submit]').click();
-await page.waitForTimeout(2000);
-const chatText = await page.locator('.ai-panel .md-body').last().textContent();
-ok('AI 问答流式响应', !!chatText && chatText.includes('mock测试响应'), `${chatText?.length} chars`);
+const finalText = await page.locator('.ai-panel .md-stream').last().textContent();
+ok('AI 回答完整输出', !!finalText && finalText.includes('mock测试响应'), `${finalText?.length} chars`);
 
 await browser.close();
 console.log(failures === 0 ? '\n✅ AI E2E PASSED' : `\n❌ ${failures} FAILURES`);

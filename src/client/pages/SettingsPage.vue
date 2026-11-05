@@ -152,12 +152,14 @@ const PROVIDER_LABELS: Record<string, string> = {
   anthropic: 'Anthropic',
   google: 'Google',
   openrouter: 'OpenRouter',
+  opencode: 'OpenCode Console(按量付费)',
 };
 const PROVIDER_BASE_PLACEHOLDER: Record<string, string> = {
   openai: '默认官方端点,自建/兼容端点填如 https://api.deepseek.com/v1',
   anthropic: '默认官方端点,可不填',
   google: '默认官方端点,可不填',
   openrouter: '默认 https://openrouter.ai/api/v1',
+  opencode: '默认 https://opencode.ai/inference/openai/v1',
 };
 
 function fillAIForm(c: AIConfigInfo) {
