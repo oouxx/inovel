@@ -34,6 +34,7 @@ bookmarkRoutes.post('/:id/bookmarks', async (c) => {
   const body = await c.req.json().catch(() => null);
   if (!body || typeof body.chapter_index !== 'number') return c.json({ error: 'invalid body' }, 400);
   const chapterIndex = body.chapter_index;
+  if (!getChapter(bookId, chapterIndex)) return c.json({ error: 'chapter not found' }, 404);
   const position = Math.min(1, Math.max(0, Number(body.position) || 0));
   // 去重:同一章节同一位置(±0.01)不重复添加
   const existing = getDb()

@@ -275,7 +275,6 @@ async function saveEdit() {
           <p class="text-xs sm:text-sm text-dim mt-2 flex flex-wrap items-center gap-x-2 gap-y-1">
             <span class="inline-flex items-center gap-1"><FileText class="w-3.5 h-3.5" /> {{ book.chapter_count }} 章</span>
             <span>{{ (book.file_size / 1024 / 1024).toFixed(2) }} MB</span>
-            <span>{{ book.encoding }}</span>
           </p>
           <p v-if="book.status === 'warn'" class="text-xs mt-2 flex items-center gap-1" style="color: #c58a2d">
             <AlertTriangle class="w-3.5 h-3.5" /> {{ book.error || '章节识别可能异常' }}

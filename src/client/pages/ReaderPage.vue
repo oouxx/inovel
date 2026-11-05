@@ -48,7 +48,6 @@ const GAP = 56;
 const pendingProgress = ref<number | null>(null); // 分页完成后要恢复的进度(0~1)
 const targetPage = ref(0);
 const pendingEnd = ref(false); // “去上一章末页”意图
-const CHARS_PER_MINUTE = 400;
 const FONT_MIN = 14;
 const FONT_MAX = 32;
 
@@ -124,47 +123,11 @@ const progressPercent = computed(() => Math.round(globalRatio.value * 100));
 const displayRatio = computed(() => (scrubbing.value ? scrubRatio.value : globalRatio.value));
 const displayPercent = computed(() => Math.round(displayRatio.value * 100));
 
-/** 剩余阅读时间:用当前章的「字符数 / 字节数」校准,中文约 400 字/分钟 */
-const chapterChars = computed(() => paragraphs.value.reduce((n, p) => n + p.length, 0));
-const bytesPerChar = computed(() => {
-  const c = currentChapter.value;
-  if (!c) return 3;
-  const byteLen = Math.max(1, c.end_offset - c.start_offset);
-  return chapterChars.value > 0 ? Math.max(0.5, byteLen / chapterChars.value) : 3;
-});
-const absoluteByte = computed(() => {
-  const c = currentChapter.value;
-  if (!c) return 0;
-  return c.start_offset + chapterRatio.value * Math.max(0, c.end_offset - c.start_offset);
-});
-const remainingBookChars = computed(() => {
-  const size = book.value?.file_size ?? 0;
-  if (!size || globalRatio.value >= 1) return 0;
-  return Math.max(0, size - absoluteByte.value) / bytesPerChar.value;
-});
-const remainingChapterMinutes = computed(
-  () => (chapterChars.value * (1 - chapterRatio.value)) / CHARS_PER_MINUTE,
-);
-const remainingBookMinutes = computed(() => remainingBookChars.value / CHARS_PER_MINUTE);
-
-function fmtMinutes(min: number) {
-  if (!Number.isFinite(min) || min <= 0) return '0 分钟';
-  if (min < 1) return '不到 1 分钟';
-  const total = Math.round(min);
-  if (total < 60) return `${total} 分钟`;
-  const h = Math.floor(total / 60);
-  const m = total % 60;
-  return m ? `${h} 小时 ${m} 分` : `${h} 小时`;
-}
-
-const remainingChapterLabel = computed(() => fmtMinutes(remainingChapterMinutes.value));
-const remainingBookLabel = computed(() => fmtMinutes(remainingBookMinutes.value));
 const pageLabel = computed(() =>
   settings.mode === 'paged'
     ? `第 ${Math.min(page.value + 1, pageCount.value)} / ${pageCount.value} 页`
     : `本章 ${Math.round(chapterRatio.value * 100)}%`,
 );
-const remainingLabel = computed(() => `全书 ${progressPercent.value}% · 约剩 ${remainingBookLabel.value}`);
 const chapterTitleShort = computed(() => {
   const t = title.value;
   return t.length > 24 ? t.slice(0, 24) + '…' : t;
@@ -1104,8 +1067,8 @@ const paraKey = (i: number) => `p${i}`;
         </div>
 
         <div class="flex items-center justify-between gap-3 px-1 tabular-nums">
-          <span class="truncate" :title="`本章约剩 ${remainingChapterLabel}`">{{ pageLabel }}</span>
-          <span class="truncate" :title="`本章约剩 ${remainingChapterLabel}`">{{ remainingLabel }}</span>
+          <span class="truncate">{{ pageLabel }}</span>
+          <span class="truncate">全书 {{ progressPercent }}%</span>
         </div>
       </footer>
     </Transition>

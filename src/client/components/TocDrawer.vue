@@ -24,7 +24,6 @@ const renderLimit = ref(RENDER_CAP);
 
 // 书签
 const bookmarks = ref<Bookmark[]>([]);
-const bookmarksLoaded = ref(false);
 
 // 全文搜索
 const findQuery = ref('');
@@ -42,14 +41,17 @@ watch(
     renderLimit.value = Math.max(RENDER_CAP, props.currentIndex + 50);
     await nextTick();
     scrollToCurrent();
+    if (tab.value === 'marks') await loadBookmarks();
   },
 );
 
+async function loadBookmarks() {
+  bookmarks.value = await api.listBookmarks(props.bookId);
+}
+
 watch(tab, async (t) => {
-  if (t === 'marks' && !bookmarksLoaded.value) {
-    bookmarks.value = await api.listBookmarks(props.bookId);
-    bookmarksLoaded.value = true;
-  }
+  // 每次切到书签页都重新拉取,避免阅读中新增书签后列表还是旧的
+  if (t === 'marks') await loadBookmarks();
 });
 
 async function scrollToCurrent() {
@@ -111,7 +113,6 @@ watch(query, () => {
 });
 watch(() => props.bookId, () => {
   bookmarks.value = [];
-  bookmarksLoaded.value = false;
   findResults.value = undefined;
   findQuery.value = '';
   findSearched.value = false;
@@ -213,7 +214,7 @@ watch(() => props.bookId, () => {
                   第 {{ b.chapter_index + 1 }} 章 · {{ Math.round(b.position * 100) }}% · {{ fmtTime(b.created_at) }}
                 </div>
               </RouterLink>
-              <button class="btn !p-1.5 !border-0 opacity-0 group-hover:opacity-100" @click="removeBookmark(b.id)">
+              <button class="btn !p-1.5 !border-0 opacity-100 sm:opacity-0 sm:group-hover:opacity-100" @click="removeBookmark(b.id)">
                 <Trash2 class="w-3.5 h-3.5" />
               </button>
             </div>

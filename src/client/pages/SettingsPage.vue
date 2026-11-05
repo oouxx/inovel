@@ -422,7 +422,6 @@ async function removeBook(b: Book) {
           <AlertTriangle v-else-if="r.status === 'warn'" class="w-4 h-4" style="color: #c58a2d" />
           <XCircle v-else class="w-4 h-4 text-red-500" />
           <span class="flex-1 truncate">{{ r.fileName }}</span>
-          <span class="text-dim">{{ r.encoding }}</span>
           <span class="font-medium">{{ r.status === 'error' ? '失败' : `${r.chapterCount} 章` }}</span>
           <span v-if="r.error" class="text-dim">{{ r.error }}</span>
         </div>
@@ -448,7 +447,6 @@ async function removeBook(b: Book) {
             <div class="text-xs text-dim mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5">
               <span>{{ b.category || '未分类' }}</span>
               <span>{{ b.chapter_count }} 章</span>
-              <span class="hidden sm:inline">{{ b.encoding }}</span>
               <span>{{ fmtSize(b.file_size) }}</span>
             </div>
           </RouterLink>

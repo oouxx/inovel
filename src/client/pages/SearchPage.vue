@@ -203,7 +203,6 @@ watch(
             <div class="text-xs text-dim mt-1 flex flex-wrap items-center gap-x-2">
               <span v-if="r.category">{{ r.category }}</span>
               <span v-if="r.chapter_count">{{ r.chapter_count }} 章</span>
-              <span class="hidden sm:inline">{{ r.encoding }}</span>
             </div>
           </div>
         </RouterLink>
